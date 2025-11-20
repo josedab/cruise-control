@@ -78,6 +78,8 @@ public class GoalOptimizer implements Runnable {
   private final OperationProgress _proposalPrecomputingProgress;
   private final Object _cacheLock;
   private volatile OptimizerResult _cachedProposals;
+  private volatile ClusterModel _cachedClusterModel;
+  private final SmartProposalCache _smartProposalCache;
   private volatile boolean _shutdown = false;
   private Thread _proposalPrecomputingSchedulerThread;
   private final boolean _allowCapacityEstimationOnProposalPrecompute;
@@ -121,6 +123,8 @@ public class GoalOptimizer implements Runnable {
     _time = time;
     _cacheLock = new ReentrantLock();
     _cachedProposals = null;
+    _cachedClusterModel = null;
+    _smartProposalCache = new SmartProposalCache();
     _progressUpdateLock = new AtomicBoolean(false);
     // A new AtomicReference with null initial value.
     _proposalGenerationException = new AtomicReference<>();
@@ -234,7 +238,41 @@ public class GoalOptimizer implements Runnable {
       throw new KafkaCruiseControlException("Attempt to use proposal cache during ongoing execution.");
     }
     synchronized (_cacheLock) {
-      return _cachedProposals != null && !_cachedProposals.modelGeneration().isStale(_loadMonitor.clusterModelGeneration());
+      if (_cachedProposals == null) {
+        return false;
+      }
+
+      // First check traditional staleness
+      boolean isStale = _cachedProposals.modelGeneration().isStale(_loadMonitor.clusterModelGeneration());
+      if (!isStale) {
+        // Not stale by traditional check - cache is valid
+        return true;
+      }
+
+      // Cache is stale by traditional check, but try smart caching
+      // Get current cluster model to detect change type
+      ClusterModel currentModel = null;
+      try {
+        currentModel = _loadMonitor.clusterModel(null, _time.milliseconds(), _requirementsWithAvailableValidWindows);
+      } catch (Exception e) {
+        LOG.debug("Could not get current cluster model for smart caching analysis", e);
+        return false;
+      }
+
+      // Detect what type of change occurred
+      ClusterChangeType changeType = _smartProposalCache.detectChangeType(_cachedClusterModel, currentModel);
+      LOG.debug("Detected cluster change type: {}", changeType);
+
+      // Check if we can reuse the cached proposals based on change type
+      boolean canReuse = _smartProposalCache.canReuseProposals(changeType, _cachedProposals.goalProposals());
+      if (canReuse) {
+        LOG.info("Smart caching: reusing cached proposals for change type {}", changeType);
+        // Update the cached cluster model to reflect the current state
+        _cachedClusterModel = currentModel;
+        return true;
+      }
+
+      return false;
     }
   }
 
@@ -553,10 +591,11 @@ public class GoalOptimizer implements Runnable {
     return _balancingConstraint.brokerSetResolver();
   }
 
-  private OptimizerResult updateCachedProposals(OptimizerResult result) {
+  private OptimizerResult updateCachedProposals(OptimizerResult result, ClusterModel clusterModel) {
     synchronized (_cacheLock) {
       _hasOngoingExplicitPrecomputation = false;
       _cachedProposals = result;
+      _cachedClusterModel = clusterModel;
       // Wake up any thread that is waiting for a proposal update.
       _cacheLock.notifyAll();
       return _cachedProposals;
@@ -566,6 +605,7 @@ public class GoalOptimizer implements Runnable {
   private void clearCachedProposal(Exception e) {
     synchronized (_cacheLock) {
       _cachedProposals = null;
+      _cachedClusterModel = null;
       _progressUpdateLock.set(false);
       _proposalPrecomputingProgress.clear();
       _proposalGenerationException.set(e);
@@ -604,7 +644,7 @@ public class GoalOptimizer implements Runnable {
         if (!clusterModel.topics().isEmpty()) {
           OptimizerResult result = optimizations(clusterModel, _goalsByPriority, operationProgress);
           LOG.debug("Generated a proposal candidate in {} ms.", _time.milliseconds() - startMs);
-          updateCachedProposals(result);
+          updateCachedProposals(result, clusterModel);
         } else {
           LOG.warn("The cluster model does not have valid topics, skipping proposal precomputation.");
         }
