@@ -1,0 +1,73 @@
+```mermaid
+sequenceDiagram
+    participant User
+    participant API as REST API
+    participant KCC as KafkaCruiseControl
+    participant LM as LoadMonitor
+    participant GO as GoalOptimizer
+    participant EX as Executor
+    participant Kafka as Kafka Cluster
+
+    Note over Kafka: Continuous Background Process
+    loop Every 120 seconds
+        Kafka->>Kafka: MetricsReporter collects JMX metrics
+        Kafka->>Kafka: Produce to __CruiseControlMetrics
+    end
+
+    Note over LM: Continuous Background Process
+    loop Every 120 seconds
+        LM->>Kafka: Consume metrics from topic
+        LM->>LM: Aggregate into time windows
+        LM->>LM: Update ClusterModel
+    end
+
+    Note over User,Kafka: User-Initiated Rebalance
+    User->>API: POST /rebalance?goals=...
+    API->>KCC: rebalance(goals, options)
+
+    KCC->>KCC: Check no execution in progress
+    KCC->>KCC: Set state: GENERATING_PROPOSALS
+
+    KCC->>LM: clusterModel(allowEstimation=true)
+    LM->>LM: Build/retrieve current ClusterModel
+    LM-->>KCC: ClusterModel
+
+    KCC->>GO: optimizations(model, goals, options)
+
+    loop For each goal in priority order
+        GO->>GO: goal.optimize(clusterModel)
+        Note over GO: Modifies ClusterModel in-place
+    end
+
+    GO->>GO: Diff initial vs final ClusterModel
+    GO-->>KCC: OptimizerResult with ExecutionProposals
+
+    KCC->>EX: executeProposals(proposals, model)
+    EX->>EX: Set state: STARTING_EXECUTION
+
+    Note over EX,Kafka: Phase 1: Inter-Broker Movements
+    EX->>EX: Create ExecutionTasks (PENDING)
+    EX->>Kafka: AdminClient.alterPartitionReassignments()
+
+    loop Monitor execution (every 10s)
+        EX->>Kafka: Check ISR status
+        Kafka-->>EX: Replica in-sync status
+        EX->>EX: Update task state (IN_PROGRESS → COMPLETED)
+    end
+
+    Note over EX,Kafka: Phase 2: Leadership Movements
+    EX->>Kafka: AdminClient.electLeaders()
+    Kafka-->>EX: Leadership changed
+
+    EX->>EX: Set state: NO_TASK_IN_PROGRESS
+    EX-->>KCC: Execution complete
+
+    KCC-->>API: OptimizerResult
+    API-->>User: 200 OK with UserTaskId
+
+    Note over User,API: User polls for completion
+    loop Every 5 seconds
+        User->>API: GET /user_tasks?user_task_ids=...
+        API-->>User: Status: IN_PROGRESS / COMPLETED
+    end
+```
