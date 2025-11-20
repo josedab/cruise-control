@@ -362,6 +362,55 @@ public final class WebServerConfig {
       + "or impersonation but rather a simple fallback to SPNEGO).";
 
   /**
+   * <code>rbac.enabled</code>
+   */
+  public static final String RBAC_ENABLED_CONFIG = "rbac.enabled";
+  public static final boolean DEFAULT_RBAC_ENABLED = false;
+  private static final String RBAC_ENABLED_DOC = "Enables Role-Based Access Control (RBAC) for fine-grained "
+      + "authorization. When enabled, users must have appropriate permissions to perform operations. "
+      + "Requires authentication to be enabled (webserver.security.enable=true). Default is false for backward compatibility.";
+
+  /**
+   * <code>rbac.provider</code>
+   */
+  public static final String RBAC_PROVIDER_CONFIG = "rbac.provider";
+  public static final String DEFAULT_RBAC_PROVIDER = "file";
+  private static final String RBAC_PROVIDER_DOC = "The RBAC provider implementation. Supported values: file, ldap, database, custom. "
+      + "Default is 'file' which loads role mappings from configuration.";
+
+  /**
+   * <code>rbac.default.role</code>
+   */
+  public static final String RBAC_DEFAULT_ROLE_CONFIG = "rbac.default.role";
+  public static final String DEFAULT_RBAC_DEFAULT_ROLE = "viewer";
+  private static final String RBAC_DEFAULT_ROLE_DOC = "The default role assigned to authenticated users who don't have "
+      + "explicit role mappings. Supported values: admin, operator, viewer, executor, auditor. Default is 'viewer' (read-only).";
+
+  /**
+   * <code>audit.log.enabled</code>
+   */
+  public static final String AUDIT_LOG_ENABLED_CONFIG = "audit.log.enabled";
+  public static final boolean DEFAULT_AUDIT_LOG_ENABLED = false;
+  private static final String AUDIT_LOG_ENABLED_DOC = "Enables comprehensive audit logging for all API operations. "
+      + "Logs include user identity, operation details, timestamps, and results. Recommended for production environments.";
+
+  /**
+   * <code>audit.log.path</code>
+   */
+  public static final String AUDIT_LOG_PATH_CONFIG = "audit.log.path";
+  public static final String DEFAULT_AUDIT_LOG_PATH = "/var/log/cruise-control/audit.log";
+  private static final String AUDIT_LOG_PATH_DOC = "Path to the audit log file. Logs are written in JSON Lines format "
+      + "(one JSON object per line). Parent directories will be created if they don't exist.";
+
+  /**
+   * <code>audit.log.destination</code>
+   */
+  public static final String AUDIT_LOG_DESTINATION_CONFIG = "audit.log.destination";
+  public static final String DEFAULT_AUDIT_LOG_DESTINATION = "file";
+  private static final String AUDIT_LOG_DESTINATION_DOC = "Audit log destination. Supported values: file, kafka, custom. "
+      + "Default is 'file'. When set to 'kafka', logs are written to the topic specified in audit.log.topic.";
+
+  /**
    * <code>vertx.enabled</code>
    */
   public static final String VERTX_ENABLED_CONFIG = "vertx.enabled";
@@ -605,6 +654,36 @@ public final class WebServerConfig {
                             DEFAULT_TRUSTED_PROXY_SPNEGO_FALLBACK_ENABLED,
                             ConfigDef.Importance.MEDIUM,
                             TRUSTED_PROXY_SPNEGO_FALLBACK_ENABLED_DOC)
+                    .define(RBAC_ENABLED_CONFIG,
+                            ConfigDef.Type.BOOLEAN,
+                            DEFAULT_RBAC_ENABLED,
+                            ConfigDef.Importance.HIGH,
+                            RBAC_ENABLED_DOC)
+                    .define(RBAC_PROVIDER_CONFIG,
+                            ConfigDef.Type.STRING,
+                            DEFAULT_RBAC_PROVIDER,
+                            ConfigDef.Importance.MEDIUM,
+                            RBAC_PROVIDER_DOC)
+                    .define(RBAC_DEFAULT_ROLE_CONFIG,
+                            ConfigDef.Type.STRING,
+                            DEFAULT_RBAC_DEFAULT_ROLE,
+                            ConfigDef.Importance.MEDIUM,
+                            RBAC_DEFAULT_ROLE_DOC)
+                    .define(AUDIT_LOG_ENABLED_CONFIG,
+                            ConfigDef.Type.BOOLEAN,
+                            DEFAULT_AUDIT_LOG_ENABLED,
+                            ConfigDef.Importance.HIGH,
+                            AUDIT_LOG_ENABLED_DOC)
+                    .define(AUDIT_LOG_PATH_CONFIG,
+                            ConfigDef.Type.STRING,
+                            DEFAULT_AUDIT_LOG_PATH,
+                            ConfigDef.Importance.MEDIUM,
+                            AUDIT_LOG_PATH_DOC)
+                    .define(AUDIT_LOG_DESTINATION_CONFIG,
+                            ConfigDef.Type.STRING,
+                            DEFAULT_AUDIT_LOG_DESTINATION,
+                            ConfigDef.Importance.MEDIUM,
+                            AUDIT_LOG_DESTINATION_DOC)
                     .define(VERTX_ENABLED_CONFIG,
                             ConfigDef.Type.BOOLEAN,
                             DEFAULT_VERTX_ENABLED,

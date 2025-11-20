@@ -1,0 +1,132 @@
+# ============================================
+# Cruise Control RBAC Configuration Example
+# ============================================
+#
+# This file demonstrates how to configure Role-Based Access Control (RBAC)
+# for Cruise Control. Copy this file and customize it for your environment.
+#
+# Prerequisites:
+# - Authentication must be enabled (webserver.security.enable=true)
+# - RBAC must be enabled (rbac.enabled=true)
+#
+
+# ============================================
+# RBAC Settings
+# ============================================
+
+# Enable RBAC (default: false for backward compatibility)
+rbac.enabled=true
+
+# Authorization provider (file, ldap, database, custom)
+rbac.provider=file
+
+# Default role for authenticated users without explicit role mappings
+# Options: admin, operator, viewer, executor, auditor
+# Recommended: viewer (read-only access is safest default)
+rbac.default.role=viewer
+
+# ============================================
+# Built-in Roles
+# ============================================
+#
+# ADMIN: Full access to all operations
+#   - Permissions: admin:*:*
+#   - Use case: Platform administrators, on-call SREs
+#
+# OPERATOR: Read all, execute rebalances, stop executions
+#   - Permissions: state:read:*, proposals:write:*, executions:execute:*
+#   - Use case: Kafka operators, SREs managing day-to-day operations
+#
+# VIEWER: Read-only access to everything
+#   - Permissions: state:read:*, proposals:read:*, executions:read:*
+#   - Use case: Developers, analysts, monitoring dashboards
+#
+# EXECUTOR: Read + execute pre-approved proposals only
+#   - Permissions: state:read:*, proposals:read:*, executions:execute:*
+#   - Use case: Automation systems, scheduled rebalancing
+#
+# AUDITOR: Read state + audit logs
+#   - Permissions: state:read:*, audit:read:*
+#   - Use case: Security auditors, compliance teams
+#
+
+# ============================================
+# User-Role Mappings (Built-in Roles)
+# ============================================
+
+# Admins (full access)
+rbac.users.admin=alice@example.com,bob@example.com
+
+# Operators (can execute operations)
+rbac.users.operator=charlie@example.com,diana@example.com,ops-team@example.com
+
+# Viewers (read-only)
+rbac.users.viewer=eve@example.com,frank@example.com,dev-team@example.com
+
+# Executors (automated systems)
+rbac.users.executor=automation-service@example.com
+
+# Auditors (security/compliance)
+rbac.users.auditor=security-team@example.com,audit@example.com
+
+# ============================================
+# Custom Roles
+# ============================================
+#
+# Custom roles can be defined with specific permissions.
+# Permission format: resource:action:cluster
+#
+# Resources:
+#   - clusters, brokers, partitions, proposals, executions, config, state, admin, audit
+#
+# Actions:
+#   - read, write, execute, admin
+#
+# Cluster scope:
+#   - * (all clusters)
+#   - specific cluster name
+#   - wildcard pattern (e.g., production-*)
+#
+# Multiple permissions are comma-separated.
+#
+
+# Example: Production-only operator
+rbac.users.prod-operator=grace@example.com
+rbac.role.prod-operator=state:read:production-*,executions:execute:production-*,proposals:write:production-*
+
+# Example: Non-production operator
+rbac.users.nonprod-operator=henry@example.com
+rbac.role.nonprod-operator=state:read:staging-*,state:read:dev-*,executions:execute:staging-*,executions:execute:dev-*
+
+# Example: Read-only access to specific cluster
+rbac.users.cluster-viewer=iris@example.com
+rbac.role.cluster-viewer=state:read:us-east-prod,proposals:read:us-east-prod
+
+# Example: Limited operator (can't modify proposals, only execute pre-approved)
+rbac.users.limited-operator=jack@example.com
+rbac.role.limited-operator=state:read:*,proposals:read:*,executions:execute:*
+
+# ============================================
+# Audit Logging Settings
+# ============================================
+
+# Enable audit logging (recommended for production)
+audit.log.enabled=true
+
+# Audit log destination: file, kafka, custom
+audit.log.destination=file
+
+# Audit log file path (for file destination)
+audit.log.path=/var/log/cruise-control/audit.log
+
+# ============================================
+# Notes
+# ============================================
+#
+# 1. Changes to this file require a Cruise Control restart
+# 2. Ensure proper file permissions (readable by Cruise Control process only)
+# 3. Test role assignments in non-production environment first
+# 4. Monitor audit logs for unauthorized access attempts
+# 5. Review and update role assignments regularly
+#
+# For more information, see the RBAC documentation.
