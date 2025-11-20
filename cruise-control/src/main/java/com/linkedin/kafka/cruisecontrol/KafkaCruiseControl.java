@@ -20,6 +20,10 @@ import com.linkedin.kafka.cruisecontrol.config.KafkaCruiseControlConfig;
 import com.linkedin.kafka.cruisecontrol.config.TopicConfigProvider;
 import com.linkedin.kafka.cruisecontrol.config.constants.AnomalyDetectorConfig;
 import com.linkedin.kafka.cruisecontrol.config.constants.ExecutorConfig;
+import com.linkedin.kafka.cruisecontrol.config.constants.ValidationConfig;
+import com.linkedin.kafka.cruisecontrol.config.validation.ConfigurationValidator;
+import com.linkedin.kafka.cruisecontrol.config.validation.ValidationResult;
+import com.linkedin.kafka.cruisecontrol.config.validation.ValidationReportFormatter;
 import com.linkedin.kafka.cruisecontrol.detector.AnomalyDetectorManager;
 import com.linkedin.kafka.cruisecontrol.detector.AnomalyDetectorState;
 import com.linkedin.kafka.cruisecontrol.detector.Provisioner;
@@ -112,6 +116,10 @@ public class KafkaCruiseControl {
   public KafkaCruiseControl(KafkaCruiseControlConfig config, MetricRegistry dropwizardMetricRegistry) {
     _config = config;
     _time = Time.SYSTEM;
+
+    // Validate configuration if enabled
+    validateConfiguration(config);
+
     // initialize some of the static state of Kafka Cruise Control;
     ModelUtils.init(config);
     ModelParameters.init(config);
@@ -916,6 +924,89 @@ public class KafkaCruiseControl {
     Set<Integer> invalidBrokerIds = brokerIds.stream().filter(id -> cluster.nodeById(id) == null).collect(Collectors.toSet());
     if (!invalidBrokerIds.isEmpty()) {
       throw new IllegalArgumentException(String.format("Broker %s does not exist.", invalidBrokerIds));
+    }
+  }
+
+  /**
+   * Validates the configuration using the configuration validation framework.
+   * If validation is enabled and errors are found, this method will throw a ConfigException.
+   *
+   * @param config The configuration to validate
+   * @throws org.apache.kafka.common.config.ConfigException if validation fails
+   */
+  private void validateConfiguration(KafkaCruiseControlConfig config) {
+    // Check if validation is enabled
+    if (!ConfigurationValidator.isValidationEnabled(config)) {
+      LOG.info("Configuration validation is disabled");
+      return;
+    }
+
+    LOG.info("Starting configuration validation...");
+    ConfigurationValidator validator = new ConfigurationValidator(config);
+    ValidationResult result = validator.validate();
+
+    // Get strictness level
+    String strictness = "normal";
+    try {
+      strictness = config.getString(ValidationConfig.CONFIG_VALIDATION_STRICTNESS_CONFIG);
+    } catch (Exception e) {
+      // Use default
+    }
+
+    // Format and log the report
+    ValidationReportFormatter formatter = new ValidationReportFormatter();
+    boolean detailedReport = true;
+    try {
+      detailedReport = config.getBoolean(ValidationConfig.CONFIG_VALIDATION_DETAILED_REPORT_CONFIG);
+    } catch (Exception e) {
+      // Use default
+    }
+
+    if (result.hasErrors() || result.hasWarnings()) {
+      if (detailedReport) {
+        String report = formatter.format(result);
+        if (result.hasErrors()) {
+          LOG.error("Configuration validation failed:\n{}", report);
+        } else {
+          LOG.warn("Configuration validation warnings:\n{}", report);
+        }
+      } else {
+        LOG.warn(formatter.formatSummary(result));
+      }
+    } else {
+      LOG.info("Configuration validation passed successfully");
+    }
+
+    // Determine if we should fail startup
+    boolean shouldFail = false;
+
+    switch (strictness.toLowerCase()) {
+      case "strict":
+        // Fail on both errors and warnings
+        shouldFail = result.hasErrors() || result.hasWarnings();
+        break;
+      case "normal":
+        // Fail only on errors
+        shouldFail = result.hasErrors();
+        break;
+      case "lenient":
+        // Never fail, just log
+        shouldFail = false;
+        break;
+      default:
+        // Default to normal
+        shouldFail = result.hasErrors();
+        break;
+    }
+
+    if (shouldFail) {
+      throw new org.apache.kafka.common.config.ConfigException(
+          String.format("Configuration validation failed with %d errors and %d warnings. " +
+              "See log for details. To disable validation, set %s=false",
+              result.errorCount(),
+              result.warningCount(),
+              ValidationConfig.CONFIG_VALIDATION_ENABLED_CONFIG)
+      );
     }
   }
 }
