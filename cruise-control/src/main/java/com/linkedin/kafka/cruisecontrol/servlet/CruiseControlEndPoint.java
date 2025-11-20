@@ -36,7 +36,10 @@ public enum CruiseControlEndPoint implements EndPoint {
   TOPIC_CONFIGURATION(KAFKA_ADMIN),
   RIGHTSIZE(KAFKA_ADMIN),
   PERMISSIONS(CRUISE_CONTROL_MONITOR),
-  REMOVE_DISKS(KAFKA_ADMIN);
+  REMOVE_DISKS(KAFKA_ADMIN),
+  // Multi-cluster endpoints
+  CLUSTERS(CRUISE_CONTROL_MONITOR),
+  CLUSTER_HEALTH(CRUISE_CONTROL_MONITOR);
   
   private static final List<CruiseControlEndPoint> CACHED_VALUES = List.of(values());
   private static final List<CruiseControlEndPoint> GET_ENDPOINTS = Arrays.asList(BOOTSTRAP,
@@ -48,7 +51,9 @@ public enum CruiseControlEndPoint implements EndPoint {
                                                                                  KAFKA_CLUSTER_STATE,
                                                                                  USER_TASKS,
                                                                                  REVIEW_BOARD,
-                                                                                 PERMISSIONS);
+                                                                                 PERMISSIONS,
+                                                                                 CLUSTERS,
+                                                                                 CLUSTER_HEALTH);
   private static final List<CruiseControlEndPoint> POST_ENDPOINTS = Arrays.asList(ADD_BROKER,
                                                                                   REMOVE_BROKER,
                                                                                   FIX_OFFLINE_REPLICAS,
