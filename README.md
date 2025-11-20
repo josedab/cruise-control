@@ -48,6 +48,37 @@ Cruise Control for Apache Kafka
     * Fix offline replicas
     * Adjust replication factor
 
+### Documentation ###
+
+Comprehensive documentation is available in the `/docs` directory:
+
+#### Getting Started
+* **[Quick Start Guide](docs/user-guide/quickstart.md)** - Get up and running in 10 minutes
+* **[Configuration Guide](docs/user-guide/configuration.md)** - Configure Cruise Control for your cluster
+* **[Operations Guide](docs/user-guide/operation.md)** - Day-to-day operations
+
+#### Architecture
+* **[Architecture Overview](docs/architecture/00-overview.md)** - High-level system design and component interactions
+* **[LoadMonitor](docs/architecture/01-load-monitor.md)** - Metrics collection and cluster modeling
+* **[GoalOptimizer](docs/architecture/02-goal-optimizer.md)** - Optimization engine internals
+* **[Executor](docs/architecture/03-executor.md)** - Safe execution engine for partition movements
+* **[AnomalyDetector](docs/architecture/04-anomaly-detector.md)** - Anomaly detection and self-healing
+* **[ClusterModel](docs/architecture/05-cluster-model.md)** - In-memory cluster state representation
+
+#### Developer Guide
+* **[Contributing](docs/developer-guide/contributing.md)** - How to contribute to Cruise Control
+* **[Building](docs/developer-guide/building.md)** - Build from source
+* **[Custom Goals](docs/developer-guide/custom-goals.md)** - Implement custom optimization goals
+* **[Javadoc Templates](docs/developer-guide/javadoc-templates.md)** - Documentation standards and examples
+
+#### Operations
+* **[Monitoring](docs/operations/monitoring.md)** - Monitor Cruise Control in production
+* **[Troubleshooting](docs/operations/troubleshooting.md)** - Common issues and solutions
+
+#### API Reference
+* **[REST API (OpenAPI)](docs/api/openapi.yaml)** - Complete REST API specification
+* **[Code Examples](docs/examples/)** - Java examples for programmatic usage
+
 ### Environment Requirements ###
 * The `main` (previously `migrate_to_kafka_2_5`) branch of Cruise Control is compatible with Apache Kafka `2.5+` (i.e. [Releases](https://github.com/linkedin/cruise-control/releases) with `2.5.*`),
   `2.6` (i.e. [Releases](https://github.com/linkedin/cruise-control/releases) with `2.5.11+`), `2.7` (i.e. [Releases](https://github.com/linkedin/cruise-control/releases) with `2.5.36+`),

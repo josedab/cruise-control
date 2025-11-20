@@ -199,34 +199,50 @@ LinkedIn Java style.
         <module name="StaticVariableName"/>
 
         <!-- JAVADOC COMMENTS -->
+        <!-- Enhanced Javadoc enforcement for RFC-0008: Improved Documentation -->
 
         <!-- If you have a Javadoc comment, make sure it is properly formed -->
         <module name="JavadocStyle">
             <property name="checkFirstSentence" value="false"/>
         </module>
 
-        <module name="JavadocMethod">
-            <property name="tokens" value="METHOD_DEF,ANNOTATION_FIELD_DEF"/>
+        <!-- Require Javadoc for all public classes and interfaces -->
+        <module name="MissingJavadocType">
+            <property name="scope" value="public"/>
+            <property name="tokens" value="CLASS_DEF,INTERFACE_DEF,ENUM_DEF,ANNOTATION_DEF,RECORD_DEF"/>
         </module>
 
-        <module name="MissingJavadocMethodCheck">
+        <!-- Require Javadoc for all public methods -->
+        <module name="MissingJavadocMethod">
             <property name="scope" value="public"/>
             <property name="allowMissingPropertyJavadoc" value="true"/>
             <property name="minLineCount" value="1"/>
-            <property name="tokens" value="METHOD_DEF,ANNOTATION_FIELD_DEF"/>
+            <property name="tokens" value="METHOD_DEF,CTOR_DEF,ANNOTATION_FIELD_DEF"/>
             <property name="ignoreMethodNamesRegex" value="^test.*$"/>
         </module>
 
-        <module name="MissingJavadocType">
-            <property name="tokens" value="INTERFACE_DEF,ANNOTATION_DEF,RECORD_DEF"/>
+        <!-- Validate Javadoc method documentation -->
+        <module name="JavadocMethod">
+            <property name="scope" value="public"/>
+            <property name="validateThrows" value="true"/>
+            <property name="tokens" value="METHOD_DEF,CTOR_DEF,ANNOTATION_FIELD_DEF"/>
         </module>
 
+        <!-- Ensure @param, @return, and @deprecated tags have descriptions -->
         <module name="NonEmptyAtclauseDescription">
-            <property name="javadocTokens" value="PARAM_LITERAL,RETURN_LITERAL,DEPRECATED_LITERAL"/>
+            <property name="javadocTokens" value="PARAM_LITERAL,RETURN_LITERAL,THROWS_LITERAL,DEPRECATED_LITERAL"/>
         </module>
 
-        <!-- Ensure proper order of javadoc block-tags or javadoc tags -->
-        <module name="AtclauseOrder"/>
+        <!-- Ensure proper order of javadoc block-tags -->
+        <module name="AtclauseOrder">
+            <property name="tagOrder" value="@param,@return,@throws,@deprecated"/>
+        </module>
+
+        <!-- Require a description in Javadoc -->
+        <module name="JavadocBlockTagLocation"/>
+
+        <!-- Validate Javadoc paragraphs -->
+        <module name="JavadocParagraph"/>
 
         <!-- NAMING CONVENTIONS -->
 

@@ -1,0 +1,72 @@
+```mermaid
+graph TB
+    subgraph "External Systems"
+        User[User/API Client]
+        Kafka[Apache Kafka Cluster<br/>10K+ Brokers]
+    end
+
+    subgraph "Cruise Control Application"
+        API[REST API Layer<br/>Vert.x/Jetty<br/>20 Endpoints]
+
+        subgraph "Core Components"
+            KCC[KafkaCruiseControl<br/>Main Coordinator<br/>Facade Pattern]
+
+            LM[LoadMonitor<br/>Metrics Collection<br/>ClusterModel Builder]
+            GO[GoalOptimizer<br/>Proposal Generator<br/>28 Goals]
+            EX[Executor<br/>Safe Execution<br/>State Machine]
+            AD[AnomalyDetectorManager<br/>7 Detectors<br/>Self-Healing]
+        end
+
+        CM[(ClusterModel<br/>In-Memory State<br/>Brokers/Replicas/Load)]
+    end
+
+    subgraph "Kafka Topics (Metrics Storage)"
+        MetricsTopic[__CruiseControlMetrics]
+        PartitionSamples[__KafkaCruiseControlPartitionMetricSamples]
+        BrokerSamples[__KafkaCruiseControlModelTrainingSamples]
+    end
+
+    %% User interactions
+    User -->|POST /rebalance| API
+    User -->|GET /proposals| API
+    User -->|GET /state| API
+
+    %% API to Core
+    API --> KCC
+
+    %% Core component relationships
+    KCC --> LM
+    KCC --> GO
+    KCC --> EX
+    KCC --> AD
+
+    %% Components to ClusterModel
+    LM --> CM
+    GO --> CM
+    EX --> CM
+    AD --> CM
+
+    %% LoadMonitor to Kafka
+    LM -->|Read Metrics| MetricsTopic
+    LM -->|Read Samples| PartitionSamples
+    LM -->|Read Samples| BrokerSamples
+    LM -->|Query Metadata| Kafka
+
+    %% Executor to Kafka
+    EX -->|Partition Reassignments| Kafka
+    EX -->|Leader Elections| Kafka
+
+    %% Kafka metrics flow
+    Kafka -->|Produce Metrics<br/>CruiseControlMetricsReporter| MetricsTopic
+
+    %% Styling
+    classDef primary fill:#ff6b6b,stroke:#333,stroke-width:2px,color:#fff
+    classDef secondary fill:#4ecdc4,stroke:#333,stroke-width:2px
+    classDef storage fill:#95e1d3,stroke:#333,stroke-width:2px
+    classDef external fill:#ffe66d,stroke:#333,stroke-width:2px
+
+    class KCC primary
+    class LM,GO,EX,AD secondary
+    class CM,MetricsTopic,PartitionSamples,BrokerSamples storage
+    class User,Kafka external
+```

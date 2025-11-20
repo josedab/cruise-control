@@ -115,6 +115,18 @@ subprojects {
     configDirectory = file("$rootDir/checkstyle")
   }
 
+  // RFC-0008: Enhanced Javadoc validation
+  javadoc {
+    options {
+      // Generate detailed reports and warnings
+      addStringOption('Xdoclint:all,-missing', '-quiet')
+      // Fail build on serious Javadoc errors (but allow missing tags for now)
+      // To enable strict mode, uncomment: addStringOption('Xwerror', '-Xdoclint:all')
+    }
+    // Exclude test sources from Javadoc
+    exclude '**/test/**'
+  }
+
   spotbugs {
     toolVersion = '4.8.6'
     excludeFilter = file("$rootDir/gradle/findbugs-exclude.xml")

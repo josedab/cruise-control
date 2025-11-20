@@ -1,0 +1,534 @@
+openapi: 3.0.0
+info:
+  title: Cruise Control REST API
+  version: 2.5.0
+  description: |
+    REST API for LinkedIn's Cruise Control for Apache Kafka.
+
+    Cruise Control automates the operation of large-scale Apache Kafka clusters by:
+    - Monitoring cluster load and resource utilization
+    - Detecting and fixing cluster anomalies
+    - Generating and executing partition rebalance proposals
+    - Providing self-healing capabilities
+
+    ## Authentication
+
+    Supports multiple authentication methods:
+    - **JWT (JSON Web Token)** - Recommended for production
+    - **Basic Auth** - Username/password authentication
+    - **SPNEGO** - Kerberos-based authentication
+    - **SSL Client Certificates**
+
+    Configure authentication in `cruisecontrol.properties`:
+    ```properties
+    webserver.security.enable=true
+    webserver.auth.credentials.file=config/credentials.properties
+    ```
+
+    ## Rate Limiting
+
+    Default rate limit: 10 requests per minute per client IP
+
+    Configure in `cruisecontrol.properties`:
+    ```properties
+    two.step.verification.enabled=true
+    ```
+
+  contact:
+    name: Cruise Control Community
+    url: https://github.com/linkedin/cruise-control
+  license:
+    name: BSD 2-Clause License
+    url: https://opensource.org/licenses/BSD-2-Clause
+
+servers:
+  - url: http://localhost:9090/kafkacruisecontrol
+    description: Local development server
+  - url: https://cruise-control.example.com/kafkacruisecontrol
+    description: Production server
+
+tags:
+  - name: Proposals
+    description: Generate and review optimization proposals
+  - name: Execution
+    description: Execute partition movements and rebalances
+  - name: Monitoring
+    description: Monitor cluster state and metrics
+  - name: Admin
+    description: Administrative operations
+
+paths:
+  /rebalance:
+    post:
+      tags:
+        - Execution
+      summary: Request cluster rebalance
+      description: |
+        Triggers a cluster rebalance operation using specified goals.
+
+        **Important:** Set `dryrun=false` to actually execute the rebalance.
+        By default, this endpoint only generates proposals (dryrun=true).
+
+        **Execution Time:** Typically 10-60 minutes for large clusters.
+
+        **Two-Step Verification:** If enabled, you must provide a review ID
+        obtained from `/proposals` endpoint.
+
+      parameters:
+        - $ref: '#/components/parameters/Goals'
+        - $ref: '#/components/parameters/DryRun'
+        - $ref: '#/components/parameters/Verbose'
+        - $ref: '#/components/parameters/ExcludedTopics'
+        - $ref: '#/components/parameters/ExcludedBrokers'
+        - $ref: '#/components/parameters/ConcurrentPartitionMovements'
+        - $ref: '#/components/parameters/ReplicationThrottle'
+        - $ref: '#/components/parameters/ReviewId'
+
+      responses:
+        '200':
+          description: Rebalance initiated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserTaskResponse'
+              example:
+                userTaskId: "12345678-abcd-1234-efgh-123456789012"
+                summary: "Rebalancing cluster with 15 goals"
+
+        '429':
+          description: Another operation is in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                errorMessage: "Cannot execute rebalance: another execution in progress"
+                stackTrace: null
+
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /proposals:
+    get:
+      tags:
+        - Proposals
+      summary: Get rebalance proposals
+      description: |
+        Generate optimization proposals without executing them.
+
+        This endpoint analyzes the current cluster state and returns
+        proposals for partition movements that would improve balance
+        according to the specified goals.
+
+        **Use this endpoint to:**
+        - Preview changes before execution
+        - Understand current goal violations
+        - Get a review ID for two-step verification
+
+      parameters:
+        - $ref: '#/components/parameters/Goals'
+        - $ref: '#/components/parameters/Verbose'
+        - $ref: '#/components/parameters/ExcludedTopics'
+        - $ref: '#/components/parameters/ExcludedBrokers'
+        - $ref: '#/components/parameters/Json'
+
+      responses:
+        '200':
+          description: Proposals generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProposalsResponse'
+
+        '500':
+          description: Failed to generate proposals
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /state:
+    get:
+      tags:
+        - Monitoring
+      summary: Get Cruise Control state
+      description: |
+        Returns the current state of Cruise Control components including:
+        - LoadMonitor state and partition coverage
+        - Executor state and ongoing operations
+        - Anomaly detector state
+
+      parameters:
+        - name: substates
+          in: query
+          description: Comma-separated list of substates to include
+          required: false
+          schema:
+            type: string
+            enum: [analyzer, monitor, executor, anomaly_detector]
+            example: "executor,monitor"
+        - $ref: '#/components/parameters/Json'
+
+      responses:
+        '200':
+          description: State retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StateResponse'
+
+  /user_tasks:
+    get:
+      tags:
+        - Monitoring
+      summary: Get user task status
+      description: |
+        Returns the status of ongoing or completed user tasks.
+
+        Use this endpoint to poll for rebalance progress.
+
+      parameters:
+        - name: user_task_ids
+          in: query
+          description: Comma-separated list of user task IDs
+          required: false
+          schema:
+            type: string
+            example: "12345678-abcd-1234-efgh-123456789012"
+        - $ref: '#/components/parameters/Json'
+
+      responses:
+        '200':
+          description: User tasks retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserTasksResponse'
+
+  /stop_proposal_execution:
+    post:
+      tags:
+        - Execution
+      summary: Stop ongoing execution
+      description: |
+        Stops an ongoing partition movement execution.
+
+        **Behavior:**
+        - Cancels pending partition movements
+        - Waits for in-flight movements to complete
+        - Returns execution to idle state
+
+        **Note:** This operation is graceful. Already-started partition
+        movements will complete before execution stops.
+
+      responses:
+        '200':
+          description: Execution stopped successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Execution stopped"
+
+        '500':
+          description: Failed to stop execution
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /add_broker:
+    post:
+      tags:
+        - Admin
+      summary: Add brokers to cluster
+      description: |
+        Generates proposals to move partitions to newly added brokers.
+
+        When new brokers are added to the cluster, they start empty.
+        This endpoint generates proposals to move partitions from existing
+        brokers to the new brokers to utilize the additional capacity.
+
+      parameters:
+        - name: brokerid
+          in: query
+          description: Comma-separated list of broker IDs to add
+          required: true
+          schema:
+            type: string
+            example: "100,101,102"
+        - $ref: '#/components/parameters/DryRun'
+        - $ref: '#/components/parameters/Goals'
+
+      responses:
+        '200':
+          description: Add broker operation initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserTaskResponse'
+
+  /remove_broker:
+    post:
+      tags:
+        - Admin
+      summary: Remove brokers from cluster
+      description: |
+        Generates proposals to move partitions off brokers before removal.
+
+        Before decommissioning brokers, use this endpoint to safely move
+        all partitions to other brokers in the cluster.
+
+      parameters:
+        - name: brokerid
+          in: query
+          description: Comma-separated list of broker IDs to remove
+          required: true
+          schema:
+            type: string
+            example: "0,1"
+        - $ref: '#/components/parameters/DryRun'
+        - $ref: '#/components/parameters/Goals'
+
+      responses:
+        '200':
+          description: Remove broker operation initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserTaskResponse'
+
+components:
+  parameters:
+    Goals:
+      name: goals
+      in: query
+      description: |
+        Comma-separated list of goal names to use for optimization.
+        If not specified, uses default goals from configuration.
+      required: false
+      schema:
+        type: string
+        example: "RackAwareGoal,ReplicaCapacityGoal,DiskCapacityGoal"
+
+    DryRun:
+      name: dryrun
+      in: query
+      description: |
+        If true, only generate proposals without executing.
+        If false, execute the proposals.
+      required: false
+      schema:
+        type: boolean
+        default: true
+
+    Verbose:
+      name: verbose
+      in: query
+      description: Include detailed information in response
+      required: false
+      schema:
+        type: boolean
+        default: false
+
+    ExcludedTopics:
+      name: excluded_topics
+      in: query
+      description: Regex pattern of topics to exclude from optimization
+      required: false
+      schema:
+        type: string
+        example: "internal-.*"
+
+    ExcludedBrokers:
+      name: exclude_recently_demoted_brokers
+      in: query
+      description: Exclude recently demoted brokers from optimization
+      required: false
+      schema:
+        type: boolean
+        default: true
+
+    ConcurrentPartitionMovements:
+      name: concurrent_partition_movements_per_broker
+      in: query
+      description: Max concurrent partition movements per broker
+      required: false
+      schema:
+        type: integer
+        default: 5
+        minimum: 1
+        maximum: 100
+
+    ReplicationThrottle:
+      name: replication_throttle
+      in: query
+      description: Replication throttle in bytes per second
+      required: false
+      schema:
+        type: integer
+        default: 10485760
+        example: 10485760
+
+    ReviewId:
+      name: review_id
+      in: query
+      description: Review ID from /proposals for two-step verification
+      required: false
+      schema:
+        type: string
+
+    Json:
+      name: json
+      in: query
+      description: Return response in JSON format
+      required: false
+      schema:
+        type: boolean
+        default: true
+
+  schemas:
+    UserTaskResponse:
+      type: object
+      properties:
+        userTaskId:
+          type: string
+          format: uuid
+          description: Unique ID to track this operation
+        summary:
+          type: string
+          description: Human-readable summary of the operation
+
+    UserTasksResponse:
+      type: object
+      properties:
+        userTasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserTask'
+
+    UserTask:
+      type: object
+      properties:
+        UserTaskId:
+          type: string
+          format: uuid
+        Status:
+          type: string
+          enum: [Active, InExecution, Completed, CompletedWithError]
+        RequestURL:
+          type: string
+        Summary:
+          type: string
+        StartMs:
+          type: integer
+          format: int64
+
+    ProposalsResponse:
+      type: object
+      properties:
+        summary:
+          type: object
+          description: Summary of proposed changes
+        goalSummary:
+          type: array
+          items:
+            type: object
+        proposals:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutionProposal'
+        reviewId:
+          type: string
+          description: Review ID for two-step verification
+
+    ExecutionProposal:
+      type: object
+      properties:
+        topicPartition:
+          type: string
+        oldReplicas:
+          type: array
+          items:
+            type: integer
+        newReplicas:
+          type: array
+          items:
+            type: integer
+
+    StateResponse:
+      type: object
+      properties:
+        MonitorState:
+          $ref: '#/components/schemas/MonitorState'
+        ExecutorState:
+          $ref: '#/components/schemas/ExecutorState'
+        AnomalyDetectorState:
+          $ref: '#/components/schemas/AnomalyDetectorState'
+
+    MonitorState:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [RUNNING, PAUSED, STOPPED]
+        numValidPartitions:
+          type: integer
+        numTotalPartitions:
+          type: integer
+        monitoringCoveragePercentage:
+          type: number
+          format: double
+        numValidSnapshotWindows:
+          type: integer
+
+    ExecutorState:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [NO_TASK_IN_PROGRESS, STARTING_EXECUTION, INTER_BROKER_REPLICA_MOVEMENT, LEADER_MOVEMENT, STOPPING_EXECUTION, STOPPED_WITH_ERROR]
+        numFinishedPartitionMovements:
+          type: integer
+        numInProgressPartitionMovements:
+          type: integer
+        numPendingPartitionMovements:
+          type: integer
+
+    AnomalyDetectorState:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [RUNNING, PAUSED]
+        selfHealingEnabled:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      properties:
+        errorMessage:
+          type: string
+        stackTrace:
+          type: string
+          nullable: true
+
+  securitySchemes:
+    BasicAuth:
+      type: http
+      scheme: basic
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - BasicAuth: []
+  - BearerAuth: []

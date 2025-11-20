@@ -1,0 +1,28 @@
+```mermaid
+stateDiagram-v2
+    [*] --> NO_TASK_IN_PROGRESS
+    NO_TASK_IN_PROGRESS --> STARTING_EXECUTION: executeProposals()
+    STARTING_EXECUTION --> INTER_BROKER_REPLICA_MOVEMENT: Phase 1 Start
+    INTER_BROKER_REPLICA_MOVEMENT --> LEADER_MOVEMENT: Phase 1 Complete
+    LEADER_MOVEMENT --> NO_TASK_IN_PROGRESS: Phase 2 Complete
+
+    INTER_BROKER_REPLICA_MOVEMENT --> STOPPING_EXECUTION: stopExecution()
+    LEADER_MOVEMENT --> STOPPING_EXECUTION: stopExecution()
+
+    STOPPING_EXECUTION --> STOPPED_WITH_ERROR: Error During Stop
+    STOPPING_EXECUTION --> NO_TASK_IN_PROGRESS: Clean Stop
+
+    STOPPED_WITH_ERROR --> NO_TASK_IN_PROGRESS: Reset
+
+    note right of INTER_BROKER_REPLICA_MOVEMENT
+        Move replicas between brokers
+        Monitor ISR status
+        Apply bandwidth throttling
+    end note
+
+    note right of LEADER_MOVEMENT
+        Transfer leadership
+        Call electLeaders()
+        Update ClusterModel
+    end note
+```
