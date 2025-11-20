@@ -27,13 +27,16 @@ public class Replica implements Serializable, Comparable<Replica> {
   public static final Replica MIN_REPLICA = new Replica(null, null, false);
   public static final Replica MAX_REPLICA = new Replica(null, null, false);
   private final TopicPartition _tp;
-  private final Load _load;
+  private transient Load _load;
+  private transient boolean _loaded;
   private final Broker _originalBroker;
   private boolean _isOriginalOffline;
   private Broker _broker;
   private boolean _isLeader;
   private final Disk _originalDisk;
   private Disk _disk;
+  // Flag to enable/disable lazy loading (controlled by config)
+  private static volatile boolean _lazyLoadingEnabled = false;
 
   /**
    * The constructor for an online replica without disk information.
@@ -57,7 +60,9 @@ public class Replica implements Serializable, Comparable<Replica> {
    */
   Replica(TopicPartition tp, Broker broker, boolean isLeader, boolean isOriginalOffline, Disk disk) {
     _tp = tp;
-    _load = new Load();
+    // Initialize load eagerly if lazy loading is disabled, otherwise defer
+    _load = _lazyLoadingEnabled ? null : new Load();
+    _loaded = !_lazyLoadingEnabled; // If eager loading, consider it loaded
     _originalBroker = broker;
     _broker = broker;
     _isLeader = isLeader;
@@ -107,7 +112,36 @@ public class Replica implements Serializable, Comparable<Replica> {
    * @return The replica load for each resource. Replicas always have an associated load.
    */
   public Load load() {
+    if (_lazyLoadingEnabled && !_loaded) {
+      loadFromStore();
+    }
     return _load;
+  }
+
+  /**
+   * Lazy load the replica metrics from the MetricStore.
+   * This method is called automatically when load() is accessed for the first time
+   * if lazy loading is enabled.
+   */
+  private void loadFromStore() {
+    if (_broker == null || _tp == null) {
+      // Handle special cases like MIN_REPLICA and MAX_REPLICA
+      _load = new Load();
+      _loaded = true;
+      return;
+    }
+
+    // Query MetricStore for this replica's metrics
+    Load loadFromStore = MetricStore.getInstance().getReplicaLoad(_tp, _broker.id());
+
+    if (loadFromStore != null) {
+      _load = loadFromStore;
+    } else {
+      // Fallback to empty load if not found in store
+      _load = new Load();
+    }
+
+    _loaded = true;
   }
 
   /**
@@ -190,14 +224,24 @@ public class Replica implements Serializable, Comparable<Replica> {
    * @param windows the windows list of the aggregated metric values.
    */
   void setMetricValues(AggregatedMetricValues aggregatedMetricValues, List<Long> windows) {
+    // Ensure load is initialized
+    if (_load == null) {
+      _load = new Load();
+    }
     _load.initializeMetricValues(aggregatedMetricValues, windows);
+    _loaded = true;
   }
 
   /**
    * Clear the content of monitoring data at each replica in the broker.
    */
   void clearLoad() {
+    // Ensure load is initialized before clearing
+    if (_load == null) {
+      _load = new Load();
+    }
     _load.clearLoad();
+    _loaded = true;
   }
 
   /**
@@ -225,12 +269,15 @@ public class Replica implements Serializable, Comparable<Replica> {
     if (!_isLeader) {
       throw new IllegalArgumentException("This method can only be invoked on a leader replica.");
     }
+    // Ensure load is loaded
+    Load load = load();
+
     // Get the inbound/outbound network and cpu load associated with leadership from the given replica.
     // All the following metric values are in a shared mode to avoid data copy.
     // Just get the first metric id because CPU only has one metric id in the group. Eventually the per replica
     // CPU utilization will be removed to use resource estimation at broker level.
     short cpuMetricId = KafkaMetricDef.resourceToMetricIds(Resource.CPU).get(0);
-    AggregatedMetricValues leadershipNwOutLoad = _load.loadFor(Resource.NW_OUT, true);
+    AggregatedMetricValues leadershipNwOutLoad = load.loadFor(Resource.NW_OUT, true);
 
     // Create a leadership load delta to store the load change.
     AggregatedMetricValues leadershipLoadDelta = new AggregatedMetricValues();
@@ -245,7 +292,7 @@ public class Replica implements Serializable, Comparable<Replica> {
 
     // Remove the outbound network leadership load from replica.
     if (updateLoad) {
-      _load.clearLoadFor(Resource.NW_OUT);
+      load.clearLoadFor(Resource.NW_OUT);
     }
 
     // Return removed leadership load.
@@ -257,8 +304,9 @@ public class Replica implements Serializable, Comparable<Replica> {
    * @return The expected load.
    */
   public Load getFollowerLoadFromLeader() {
+    Load currentLoad = load(); // Ensure load is loaded
     Load load = new Load();
-    load.initializeMetricValues(_load.loadByWindows(), _load.windows());
+    load.initializeMetricValues(currentLoad.loadByWindows(), currentLoad.windows());
     load.subtractLoad(leaderLoadDelta(false));
     return load;
   }
@@ -271,14 +319,17 @@ public class Replica implements Serializable, Comparable<Replica> {
    * @return The cpu load change.
    */
   private MetricValues computeCpuLoadAsFollower(AggregatedMetricValues leadershipNwOutLoad, boolean updateLoad) {
+    // Ensure load is loaded
+    Load load = load();
+
     // Just get the first metric id because CPU only has one metric id in the group. Eventually the per replica
     // CPU utilization will be removed to use resource estimation at broker level.
     short cpuMetricId = KafkaMetricDef.resourceToMetricIds(Resource.CPU).get(0);
     // Use the shared data structure so we can set the load directly.
-    MetricValues cpuLoad = _load.loadFor(Resource.CPU, true).valuesFor(cpuMetricId);
-    AggregatedMetricValues leadershipNwInLoad = _load.loadFor(Resource.NW_IN, true);
+    MetricValues cpuLoad = load.loadFor(Resource.CPU, true).valuesFor(cpuMetricId);
+    AggregatedMetricValues leadershipNwInLoad = load.loadFor(Resource.NW_IN, true);
 
-    MetricValues cpuLoadChange = new MetricValues(_load.numWindows());
+    MetricValues cpuLoadChange = new MetricValues(load.numWindows());
     MetricValues totalNetworkOutLoad =
         leadershipNwOutLoad.valuesForGroup(Resource.NW_OUT.name(), KafkaMetricDef.commonMetricDef(), false);
     MetricValues totalNetworkInLoad =
@@ -306,7 +357,7 @@ public class Replica implements Serializable, Comparable<Replica> {
   void makeLeader(AggregatedMetricValues leadershipLoadDelta) {
     // Add leadership to the replica.
     setLeadership(true);
-    _load.addLoad(leadershipLoadDelta);
+    load().addLoad(leadershipLoadDelta);
   }
 
   /**
@@ -318,7 +369,7 @@ public class Replica implements Serializable, Comparable<Replica> {
     replicaMap.put(ModelUtils.BROKER_ID, _broker.id());
     replicaMap.put(ModelUtils.TOPIC, _tp.topic());
     replicaMap.put(ModelUtils.PARTITION, _tp.partition());
-    replicaMap.put(ModelUtils.LOAD, _load.getJsonStructure());
+    replicaMap.put(ModelUtils.LOAD, load().getJsonStructure());
     return replicaMap;
   }
 
@@ -328,7 +379,7 @@ public class Replica implements Serializable, Comparable<Replica> {
    */
   public void writeTo(OutputStream out) throws IOException {
     out.write(String.format("<Replica isLeader=\"%s\" id=\"%d\">%n%s", isLeader(), _broker.id(), _tp).getBytes(StandardCharsets.UTF_8));
-    _load.writeTo(out);
+    load().writeTo(out);
     out.write("</Replica>%n".getBytes(StandardCharsets.UTF_8));
   }
 
@@ -391,5 +442,34 @@ public class Replica implements Serializable, Comparable<Replica> {
   @Override
   public int hashCode() {
     return Objects.hash(_tp, _originalBroker.id());
+  }
+
+  /**
+   * Enable lazy loading of replica metrics.
+   * When enabled, replica loads are fetched from MetricStore on first access.
+   *
+   * @param enabled true to enable lazy loading, false to disable.
+   */
+  public static void setLazyLoadingEnabled(boolean enabled) {
+    _lazyLoadingEnabled = enabled;
+  }
+
+  /**
+   * Check if lazy loading is enabled.
+   *
+   * @return true if lazy loading is enabled, false otherwise.
+   */
+  public static boolean isLazyLoadingEnabled() {
+    return _lazyLoadingEnabled;
+  }
+
+  /**
+   * Check if this replica's load has been loaded.
+   * Only meaningful when lazy loading is enabled.
+   *
+   * @return true if the load has been loaded, false otherwise.
+   */
+  public boolean isLoaded() {
+    return _loaded;
   }
 }

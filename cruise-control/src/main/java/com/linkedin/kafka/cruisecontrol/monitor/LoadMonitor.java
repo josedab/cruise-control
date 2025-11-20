@@ -173,6 +173,11 @@ public class LoadMonitor {
     _defaultModelCompletenessRequirements =
         MonitorUtils.combineLoadRequirementOptions(AnalyzerUtils.getDefaultGoalsByPriority(config));
 
+    // Enable lazy replica loading if configured
+    boolean lazyLoadingEnabled = config.getBoolean(MonitorConfig.CLUSTER_MODEL_LAZY_REPLICA_LOADING_ENABLED_CONFIG);
+    com.linkedin.kafka.cruisecontrol.model.Replica.setLazyLoadingEnabled(lazyLoadingEnabled);
+    LOG.info("Lazy replica loading is {}", lazyLoadingEnabled ? "enabled" : "disabled");
+
     _loadMonitorTaskRunner =
         new LoadMonitorTaskRunner(config, _partitionMetricSampleAggregator, _brokerMetricSampleAggregator, _metadataClient,
                                   metricDef, time, dropwizardMetricRegistry, _brokerCapacityConfigResolver);
@@ -508,6 +513,11 @@ public class LoadMonitor {
     GeneratingClusterModel step = new GeneratingClusterModel(partitionValuesAndExtrapolations.size());
     operationProgress.addStep(step);
 
+    // Populate MetricStore if lazy loading is enabled
+    if (com.linkedin.kafka.cruisecontrol.model.Replica.isLazyLoadingEnabled()) {
+      populateMetricStore(cluster, partitionValuesAndExtrapolations, partitionMetricSampleAggregationResult.windows());
+    }
+
     // Create an empty cluster model first.
     long currentLoadGeneration = partitionMetricSampleAggregationResult.generation();
     ModelGeneration modelGeneration = new ModelGeneration(clusterAndGeneration.generation(), currentLoadGeneration);
@@ -636,6 +646,47 @@ public class LoadMonitor {
   public Set<Integer> brokersWithReplicas(long timeout) {
     Cluster kafkaCluster = _metadataClient.refreshMetadata(timeout).cluster();
     return MonitorUtils.brokersWithReplicas(kafkaCluster);
+  }
+
+  /**
+   * Populate MetricStore with aggregated partition metrics for lazy loading.
+   *
+   * @param cluster The Kafka cluster.
+   * @param partitionValuesAndExtrapolations Map of partition entities to their metric values.
+   * @param windows The time windows for the aggregated metrics.
+   */
+  private void populateMetricStore(Cluster cluster,
+                                    Map<PartitionEntity, ValuesAndExtrapolations> partitionValuesAndExtrapolations,
+                                    List<Long> windows) {
+    long startMs = _time.milliseconds();
+
+    // Convert partition entities to TopicPartition and build the mapping
+    Map<TopicPartition, ValuesAndExtrapolations> tpToMetrics = new java.util.HashMap<>();
+    Map<TopicPartition, List<Integer>> tpToReplicaBrokers = new java.util.HashMap<>();
+
+    for (Map.Entry<PartitionEntity, ValuesAndExtrapolations> entry : partitionValuesAndExtrapolations.entrySet()) {
+      TopicPartition tp = entry.getKey().tp();
+      ValuesAndExtrapolations metrics = entry.getValue();
+
+      tpToMetrics.put(tp, metrics);
+
+      // Get the brokers hosting replicas for this partition
+      org.apache.kafka.common.PartitionInfo partitionInfo = cluster.partition(tp);
+      if (partitionInfo != null && partitionInfo.replicas() != null) {
+        List<Integer> replicaBrokers = new java.util.ArrayList<>();
+        for (org.apache.kafka.common.Node node : partitionInfo.replicas()) {
+          replicaBrokers.add(node.id());
+        }
+        tpToReplicaBrokers.put(tp, replicaBrokers);
+      }
+    }
+
+    // Populate the MetricStore
+    com.linkedin.kafka.cruisecontrol.model.MetricStore.getInstance()
+        .populateFromAggregation(tpToMetrics, tpToReplicaBrokers, windows);
+
+    long elapsed = _time.milliseconds() - startMs;
+    LOG.info("Populated MetricStore with metrics for {} partitions in {} ms", tpToMetrics.size(), elapsed);
   }
 
   /**
