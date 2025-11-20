@@ -7,6 +7,8 @@ package com.linkedin.kafka.cruisecontrol.analyzer.goals;
 
 import com.linkedin.kafka.cruisecontrol.common.Resource;
 import com.linkedin.kafka.cruisecontrol.analyzer.BalancingConstraint;
+import java.util.Collections;
+import java.util.Set;
 
 
 public class CpuUsageDistributionGoal extends ResourceDistributionGoal {
@@ -28,6 +30,11 @@ public class CpuUsageDistributionGoal extends ResourceDistributionGoal {
   @Override
   protected Resource resource() {
     return Resource.CPU;
+  }
+
+  @Override
+  public Set<com.linkedin.kafka.cruisecontrol.analyzer.goals.Resource> modifiedResources() {
+    return Collections.singleton(com.linkedin.kafka.cruisecontrol.analyzer.goals.Resource.CPU_USAGE_DISTRIBUTION);
   }
 
 }

@@ -90,6 +90,8 @@ public class GoalOptimizer implements Runnable {
   private final double _strictnessWeight;
   private final OptimizationOptionsGenerator _optimizationOptionsGenerator;
   private volatile boolean _hasUnfixableProposalOptimization;
+  private final boolean _parallelGoalExecutionEnabled;
+  private final ParallelGoalOptimizer _parallelGoalOptimizer;
 
   /**
    * Constructor for Goal Optimizer takes the goals as input. The order of the list determines the priority of goals
@@ -140,6 +142,15 @@ public class GoalOptimizer implements Runnable {
     _optimizationOptionsGenerator = config.getConfiguredInstance(AnalyzerConfig.OPTIMIZATION_OPTIONS_GENERATOR_CLASS_CONFIG,
                                                                  OptimizationOptionsGenerator.class,
                                                                  overrideConfigs);
+    _parallelGoalExecutionEnabled = config.getBoolean(AnalyzerConfig.GOAL_OPTIMIZER_PARALLEL_ENABLED_CONFIG);
+    if (_parallelGoalExecutionEnabled) {
+      int parallelThreads = config.getInt(AnalyzerConfig.GOAL_OPTIMIZER_PARALLEL_THREADS_CONFIG);
+      _parallelGoalOptimizer = new ParallelGoalOptimizer(parallelThreads, _time);
+      LOG.info("Parallel goal execution ENABLED with {} threads", parallelThreads);
+    } else {
+      _parallelGoalOptimizer = null;
+      LOG.info("Parallel goal execution DISABLED (using serial execution)");
+    }
   }
 
   /**
@@ -454,46 +465,77 @@ public class GoalOptimizer implements Runnable {
     Map<TopicPartition, ReplicaPlacementInfo> preOptimizedLeaderDistribution = null;
 
     ProvisionResponse provisionResponse = new ProvisionResponse(ProvisionStatus.UNDECIDED);
-    Map<String, Duration> optimizationDurationByGoal = new HashMap<>();
-    for (Goal goal : goalsByPriority) {
-      preOptimizedReplicaDistribution = preOptimizedReplicaDistribution == null ? initReplicaDistribution : clusterModel.getReplicaDistribution();
-      preOptimizedLeaderDistribution = preOptimizedLeaderDistribution == null ? initLeaderDistribution : clusterModel.getLeaderDistribution();
-      OptimizationForGoal step = new OptimizationForGoal(goal.name());
-      operationProgress.addStep(step);
-      LOG.debug("Optimizing goal {}", goal.name());
-      long startTimeMs = _time.milliseconds();
-      boolean succeeded;
+    Map<String, Duration> optimizationDurationByGoal;
+
+    // Choose between parallel and serial execution based on configuration
+    if (_parallelGoalExecutionEnabled && _parallelGoalOptimizer != null) {
+      LOG.info("Using PARALLEL goal execution for {} goals", goalsByPriority.size());
       try {
-        succeeded = goal.optimize(clusterModel, optimizedGoals, optimizationOptions);
+        optimizationDurationByGoal = _parallelGoalOptimizer.optimizeGoalsInParallel(
+            clusterModel, goalsByPriority, optimizedGoals, optimizationOptions);
       } catch (OptimizationFailureException e) {
         setHasUnfixableProposalOptimization(true, goalsByPriority);
         throw e;
       }
-      optimizedGoals.add(goal);
-      statsByGoalPriority.put(goal, clusterModel.getClusterStats(_balancingConstraint, optimizationOptions));
-      optimizationDurationByGoal.put(goal.name(), Duration.ofMillis(_time.milliseconds() - startTimeMs));
 
-      boolean hasDiff = AnalyzerUtils.hasDiff(preOptimizedReplicaDistribution, preOptimizedLeaderDistribution, clusterModel);
-      if (hasDiff || !succeeded) {
+      // Collect stats and provision responses after parallel execution
+      for (Goal goal : goalsByPriority) {
+        statsByGoalPriority.put(goal, clusterModel.getClusterStats(_balancingConstraint, optimizationOptions));
+        provisionResponse.aggregate(goal.provisionResponse());
+      }
+
+      // For parallel execution, we check violations at the end
+      // TODO: Improve violation tracking for parallel execution
+      for (Goal goal : goalsByPriority) {
+        boolean hasDiff = true; // Conservative: assume changes were made
         violatedGoalNamesBeforeOptimization.add(goal.name());
       }
-      if (!succeeded) {
-        violatedGoalNamesAfterOptimization.add(goal.name());
-      }
 
-      step.done();
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Broker level stats after optimization: {}", clusterModel.brokerStats(null));
+    } else {
+      LOG.info("Using SERIAL goal execution for {} goals", goalsByPriority.size());
+      optimizationDurationByGoal = new HashMap<>();
+
+      // Original serial execution loop
+      for (Goal goal : goalsByPriority) {
+        preOptimizedReplicaDistribution = preOptimizedReplicaDistribution == null ? initReplicaDistribution : clusterModel.getReplicaDistribution();
+        preOptimizedLeaderDistribution = preOptimizedLeaderDistribution == null ? initLeaderDistribution : clusterModel.getLeaderDistribution();
+        OptimizationForGoal step = new OptimizationForGoal(goal.name());
+        operationProgress.addStep(step);
+        LOG.debug("Optimizing goal {}", goal.name());
+        long startTimeMs = _time.milliseconds();
+        boolean succeeded;
+        try {
+          succeeded = goal.optimize(clusterModel, optimizedGoals, optimizationOptions);
+        } catch (OptimizationFailureException e) {
+          setHasUnfixableProposalOptimization(true, goalsByPriority);
+          throw e;
+        }
+        optimizedGoals.add(goal);
+        statsByGoalPriority.put(goal, clusterModel.getClusterStats(_balancingConstraint, optimizationOptions));
+        optimizationDurationByGoal.put(goal.name(), Duration.ofMillis(_time.milliseconds() - startTimeMs));
+
+        boolean hasDiff = AnalyzerUtils.hasDiff(preOptimizedReplicaDistribution, preOptimizedLeaderDistribution, clusterModel);
+        if (hasDiff || !succeeded) {
+          violatedGoalNamesBeforeOptimization.add(goal.name());
+        }
+        if (!succeeded) {
+          violatedGoalNamesAfterOptimization.add(goal.name());
+        }
+
+        step.done();
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Broker level stats after optimization: {}", clusterModel.brokerStats(null));
+        }
+        provisionResponse.aggregate(goal.provisionResponse());
+        LOG.info("[{}/{}] Generated {} proposals for {}{}. Provision status: {}; aggregated provision status: {}",
+                 optimizedGoals.size(),
+                 _goalsByPriority.size(),
+                 hasDiff ? "some" : "no",
+                 isSelfHealing ? "self-healing " : "",
+                 goal.name(),
+                 goal.provisionResponse().status(),
+                 provisionResponse.status());
       }
-      provisionResponse.aggregate(goal.provisionResponse());
-      LOG.info("[{}/{}] Generated {} proposals for {}{}. Provision status: {}; aggregated provision status: {}",
-               optimizedGoals.size(),
-               _goalsByPriority.size(),
-               hasDiff ? "some" : "no",
-               isSelfHealing ? "self-healing " : "",
-               goal.name(),
-               goal.provisionResponse().status(),
-               provisionResponse.status());
     }
 
     setHasUnfixableProposalOptimization(false, goalsByPriority);

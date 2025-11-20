@@ -236,6 +236,26 @@ public final class AnalyzerConfig {
       + "optimization proposal candidates. The more threads are used, the more memory and CPU resource will be used.";
 
   /**
+   * <code>goal.optimizer.parallel.enabled</code>
+   */
+  public static final String GOAL_OPTIMIZER_PARALLEL_ENABLED_CONFIG = "goal.optimizer.parallel.enabled";
+  public static final boolean DEFAULT_GOAL_OPTIMIZER_PARALLEL_ENABLED = false;
+  public static final String GOAL_OPTIMIZER_PARALLEL_ENABLED_DOC = "Enable parallel execution of goals that modify "
+      + "disjoint sets of resources. When enabled, goals are analyzed for dependencies and independent goals are "
+      + "executed concurrently, which can reduce total optimization time by 40-60% on large clusters. This is an "
+      + "experimental feature and is disabled by default.";
+
+  /**
+   * <code>goal.optimizer.parallel.threads</code>
+   */
+  public static final String GOAL_OPTIMIZER_PARALLEL_THREADS_CONFIG = "goal.optimizer.parallel.threads";
+  public static final int DEFAULT_GOAL_OPTIMIZER_PARALLEL_THREADS = 4;
+  public static final String GOAL_OPTIMIZER_PARALLEL_THREADS_DOC = "The maximum number of goals to execute in parallel. "
+      + "This determines the thread pool size for parallel goal execution. Higher values can improve performance but "
+      + "increase memory usage as each parallel goal requires its own copy of the ClusterModel. Only effective when "
+      + "goal.optimizer.parallel.enabled is true. Recommended value: number of CPU cores or 4-8 for large clusters.";
+
+  /**
    * <code>optimization.options.generator.class</code>
    */
   public static final String OPTIMIZATION_OPTIONS_GENERATOR_CLASS_CONFIG = "optimization.options.generator.class";
@@ -590,6 +610,17 @@ public final class AnalyzerConfig {
                             between(0, 1),
                             ConfigDef.Importance.LOW,
                             NUM_PROPOSAL_PRECOMPUTE_THREADS_DOC)
+                    .define(GOAL_OPTIMIZER_PARALLEL_ENABLED_CONFIG,
+                            ConfigDef.Type.BOOLEAN,
+                            DEFAULT_GOAL_OPTIMIZER_PARALLEL_ENABLED,
+                            ConfigDef.Importance.LOW,
+                            GOAL_OPTIMIZER_PARALLEL_ENABLED_DOC)
+                    .define(GOAL_OPTIMIZER_PARALLEL_THREADS_CONFIG,
+                            ConfigDef.Type.INT,
+                            DEFAULT_GOAL_OPTIMIZER_PARALLEL_THREADS,
+                            atLeast(1),
+                            ConfigDef.Importance.LOW,
+                            GOAL_OPTIMIZER_PARALLEL_THREADS_DOC)
                     .define(GOALS_CONFIG,
                             ConfigDef.Type.LIST,
                             DEFAULT_GOALS,

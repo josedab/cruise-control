@@ -18,6 +18,7 @@ import com.linkedin.kafka.cruisecontrol.model.ClusterModelStats;
 import com.linkedin.kafka.cruisecontrol.monitor.ModelCompletenessRequirements;
 import java.io.Serializable;
 import java.util.Comparator;
+import java.util.Collections;
 import java.util.Set;
 import org.apache.kafka.common.annotation.InterfaceStability;
 
@@ -134,6 +135,27 @@ public interface Goal extends CruiseControlConfigurable {
    * @return The {@link ProvisionResponse} of this goal.
    */
   ProvisionResponse provisionResponse();
+
+  /**
+   * Returns the set of resources that this goal modifies during optimization.
+   * <p>
+   *   This is used by the parallel goal execution engine to determine which goals can run concurrently.
+   *   Goals that modify disjoint sets of resources can potentially run in parallel, while goals that
+   *   modify overlapping resources must run sequentially.
+   * </p>
+   * <p>
+   *   The default implementation returns an empty set, which is interpreted conservatively as
+   *   "this goal may modify any resource" and forces the goal to run serially with all other goals.
+   *   Goal implementations should override this method to specify exactly which resources they modify
+   *   to enable parallel execution where possible.
+   * </p>
+   * @return A set of {@link Resource} types that this goal modifies. An empty set indicates unknown
+   *         or all resources (conservative default).
+   */
+  default Set<Resource> modifiedResources() {
+    // Conservative default: empty set means "unknown resources", treated as conflicts with everything
+    return Collections.emptySet();
+  }
 
   /**
    * A comparator that compares two cluster model stats.

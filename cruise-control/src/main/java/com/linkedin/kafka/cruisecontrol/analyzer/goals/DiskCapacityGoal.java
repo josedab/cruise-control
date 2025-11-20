@@ -11,6 +11,8 @@ import com.linkedin.kafka.cruisecontrol.analyzer.BalancingConstraint;
 import com.linkedin.kafka.cruisecontrol.analyzer.BalancingAction;
 import com.linkedin.kafka.cruisecontrol.analyzer.ActionType;
 import com.linkedin.kafka.cruisecontrol.model.ClusterModel;
+import java.util.Collections;
+import java.util.Set;
 
 import static com.linkedin.kafka.cruisecontrol.analyzer.ActionAcceptance.ACCEPT;
 
@@ -40,6 +42,11 @@ public class DiskCapacityGoal extends CapacityGoal {
   public ActionAcceptance actionAcceptance(BalancingAction action, ClusterModel clusterModel) {
     // Leadership movement won't cause disk utilization change.
     return action.balancingAction() == ActionType.LEADERSHIP_MOVEMENT ? ACCEPT : super.actionAcceptance(action, clusterModel);
+  }
+
+  @Override
+  public Set<com.linkedin.kafka.cruisecontrol.analyzer.goals.Resource> modifiedResources() {
+    return Collections.singleton(com.linkedin.kafka.cruisecontrol.analyzer.goals.Resource.DISK_CAPACITY);
   }
 
 }
