@@ -11,6 +11,7 @@ import com.linkedin.kafka.cruisecontrol.config.constants.CruiseControlParameters
 import com.linkedin.kafka.cruisecontrol.config.constants.CruiseControlRequestConfig;
 import com.linkedin.kafka.cruisecontrol.config.constants.ExecutorConfig;
 import com.linkedin.kafka.cruisecontrol.config.constants.MonitorConfig;
+import com.linkedin.kafka.cruisecontrol.config.constants.OpenTelemetryConfig;
 import com.linkedin.kafka.cruisecontrol.config.constants.UserTaskManagerConfig;
 import com.linkedin.kafka.cruisecontrol.config.constants.WebServerConfig;
 import com.linkedin.kafka.cruisecontrol.metricsreporter.CruiseControlMetricsReporterConfig;
@@ -40,7 +41,7 @@ public class KafkaCruiseControlConfig extends AbstractConfig {
   static {
     CONFIG = CruiseControlRequestConfig.define(CruiseControlParametersConfig.define(AnomalyDetectorConfig.define(
         AnalyzerConfig.define(ExecutorConfig.define(MonitorConfig.define(WebServerConfig.define(
-            UserTaskManagerConfig.define(new ConfigDef())))))))).withClientSslSupport().withClientSaslSupport();
+            UserTaskManagerConfig.define(OpenTelemetryConfig.define(new ConfigDef()))))))))).withClientSslSupport().withClientSaslSupport();
   }
 
   public KafkaCruiseControlConfig(Map<?, ?> originals) {

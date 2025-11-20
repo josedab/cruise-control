@@ -12,6 +12,7 @@ import com.linkedin.kafka.cruisecontrol.analyzer.goals.Goal;
 import com.linkedin.kafka.cruisecontrol.config.BrokerSetResolver;
 import com.linkedin.kafka.cruisecontrol.config.KafkaCruiseControlConfig;
 import com.linkedin.kafka.cruisecontrol.common.KafkaCruiseControlThreadFactory;
+import com.linkedin.kafka.cruisecontrol.common.tracing.OpenTelemetryManager;
 import com.linkedin.kafka.cruisecontrol.config.constants.AnalyzerConfig;
 import com.linkedin.kafka.cruisecontrol.exception.KafkaCruiseControlException;
 import com.linkedin.kafka.cruisecontrol.async.progress.OptimizationForGoal;
@@ -49,6 +50,10 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Scope;
 
 import static com.linkedin.kafka.cruisecontrol.KafkaCruiseControlUtils.ADMIN_CLIENT_CONFIG;
 import static com.linkedin.kafka.cruisecontrol.KafkaCruiseControlUtils.balancednessCostByGoal;
@@ -90,6 +95,7 @@ public class GoalOptimizer implements Runnable {
   private final double _strictnessWeight;
   private final OptimizationOptionsGenerator _optimizationOptionsGenerator;
   private volatile boolean _hasUnfixableProposalOptimization;
+  private final OpenTelemetryManager _openTelemetryManager;
 
   /**
    * Constructor for Goal Optimizer takes the goals as input. The order of the list determines the priority of goals
@@ -140,6 +146,7 @@ public class GoalOptimizer implements Runnable {
     _optimizationOptionsGenerator = config.getConfiguredInstance(AnalyzerConfig.OPTIMIZATION_OPTIONS_GENERATOR_CLASS_CONFIG,
                                                                  OptimizationOptionsGenerator.class,
                                                                  overrideConfigs);
+    _openTelemetryManager = new OpenTelemetryManager(config);
   }
 
   /**
@@ -254,6 +261,7 @@ public class GoalOptimizer implements Runnable {
     } catch (InterruptedException e) {
       LOG.warn("Interrupted while waiting for goal optimizer to shutdown.");
     }
+    _openTelemetryManager.shutdown();
     LOG.info("Goal optimizer shutdown completed.");
   }
 
@@ -438,89 +446,129 @@ public class GoalOptimizer implements Runnable {
                                        Map<TopicPartition, List<ReplicaPlacementInfo>> initReplicaDistributionForProposalGeneration,
                                        OptimizationOptions optimizationOptions)
       throws KafkaCruiseControlException {
-    LOG.trace("Cluster before optimization is {}", clusterModel);
-    BrokerStats brokerStatsBeforeOptimization = clusterModel.brokerStats(null);
-    Map<TopicPartition, List<ReplicaPlacementInfo>> initReplicaDistribution = clusterModel.getReplicaDistribution();
-    Map<TopicPartition, ReplicaPlacementInfo> initLeaderDistribution = clusterModel.getLeaderDistribution();
-    boolean isSelfHealing = !clusterModel.selfHealingEligibleReplicas().isEmpty();
+    Tracer tracer = _openTelemetryManager.getTracer();
+    Span optimizationsSpan = tracer.spanBuilder("goal-optimizer.optimizations")
+        .setAttribute("goals.count", goalsByPriority.size())
+        .setAttribute("cluster.brokers", clusterModel.brokers().size())
+        .startSpan();
 
-    // Set of balancing proposals that will be applied to the given cluster state to satisfy goals (leadership
-    // transfer AFTER partition transfer.)
-    Set<Goal> optimizedGoals = new HashSet<>();
-    Set<String> violatedGoalNamesBeforeOptimization = new HashSet<>();
-    Set<String> violatedGoalNamesAfterOptimization = new HashSet<>();
-    LinkedHashMap<Goal, ClusterModelStats> statsByGoalPriority = new LinkedHashMap<>(goalsByPriority.size());
-    Map<TopicPartition, List<ReplicaPlacementInfo>> preOptimizedReplicaDistribution = null;
-    Map<TopicPartition, ReplicaPlacementInfo> preOptimizedLeaderDistribution = null;
+    try (Scope optimizationsScope = optimizationsSpan.makeCurrent()) {
+      LOG.trace("Cluster before optimization is {}", clusterModel);
+      BrokerStats brokerStatsBeforeOptimization = clusterModel.brokerStats(null);
+      Map<TopicPartition, List<ReplicaPlacementInfo>> initReplicaDistribution = clusterModel.getReplicaDistribution();
+      Map<TopicPartition, ReplicaPlacementInfo> initLeaderDistribution = clusterModel.getLeaderDistribution();
+      boolean isSelfHealing = !clusterModel.selfHealingEligibleReplicas().isEmpty();
 
-    ProvisionResponse provisionResponse = new ProvisionResponse(ProvisionStatus.UNDECIDED);
-    Map<String, Duration> optimizationDurationByGoal = new HashMap<>();
-    for (Goal goal : goalsByPriority) {
-      preOptimizedReplicaDistribution = preOptimizedReplicaDistribution == null ? initReplicaDistribution : clusterModel.getReplicaDistribution();
-      preOptimizedLeaderDistribution = preOptimizedLeaderDistribution == null ? initLeaderDistribution : clusterModel.getLeaderDistribution();
-      OptimizationForGoal step = new OptimizationForGoal(goal.name());
-      operationProgress.addStep(step);
-      LOG.debug("Optimizing goal {}", goal.name());
-      long startTimeMs = _time.milliseconds();
-      boolean succeeded;
-      try {
-        succeeded = goal.optimize(clusterModel, optimizedGoals, optimizationOptions);
-      } catch (OptimizationFailureException e) {
-        setHasUnfixableProposalOptimization(true, goalsByPriority);
-        throw e;
-      }
-      optimizedGoals.add(goal);
-      statsByGoalPriority.put(goal, clusterModel.getClusterStats(_balancingConstraint, optimizationOptions));
-      optimizationDurationByGoal.put(goal.name(), Duration.ofMillis(_time.milliseconds() - startTimeMs));
+      // Set of balancing proposals that will be applied to the given cluster state to satisfy goals (leadership
+      // transfer AFTER partition transfer.)
+      Set<Goal> optimizedGoals = new HashSet<>();
+      Set<String> violatedGoalNamesBeforeOptimization = new HashSet<>();
+      Set<String> violatedGoalNamesAfterOptimization = new HashSet<>();
+      LinkedHashMap<Goal, ClusterModelStats> statsByGoalPriority = new LinkedHashMap<>(goalsByPriority.size());
+      Map<TopicPartition, List<ReplicaPlacementInfo>> preOptimizedReplicaDistribution = null;
+      Map<TopicPartition, ReplicaPlacementInfo> preOptimizedLeaderDistribution = null;
 
-      boolean hasDiff = AnalyzerUtils.hasDiff(preOptimizedReplicaDistribution, preOptimizedLeaderDistribution, clusterModel);
-      if (hasDiff || !succeeded) {
-        violatedGoalNamesBeforeOptimization.add(goal.name());
-      }
-      if (!succeeded) {
-        violatedGoalNamesAfterOptimization.add(goal.name());
+      ProvisionResponse provisionResponse = new ProvisionResponse(ProvisionStatus.UNDECIDED);
+      Map<String, Duration> optimizationDurationByGoal = new HashMap<>();
+      for (Goal goal : goalsByPriority) {
+        // Create a span for each individual goal optimization
+        Span goalSpan = tracer.spanBuilder("goal.optimize")
+            .setAttribute("goal.name", goal.name())
+            .startSpan();
+        try (Scope goalScope = goalSpan.makeCurrent()) {
+          preOptimizedReplicaDistribution = preOptimizedReplicaDistribution == null ? initReplicaDistribution : clusterModel.getReplicaDistribution();
+          preOptimizedLeaderDistribution = preOptimizedLeaderDistribution == null ? initLeaderDistribution : clusterModel.getLeaderDistribution();
+          OptimizationForGoal step = new OptimizationForGoal(goal.name());
+          operationProgress.addStep(step);
+          LOG.debug("Optimizing goal {}", goal.name());
+          long startTimeMs = _time.milliseconds();
+          boolean succeeded;
+          try {
+            succeeded = goal.optimize(clusterModel, optimizedGoals, optimizationOptions);
+          } catch (OptimizationFailureException e) {
+            goalSpan.recordException(e);
+            goalSpan.setStatus(StatusCode.ERROR, "Goal optimization failed");
+            setHasUnfixableProposalOptimization(true, goalsByPriority);
+            throw e;
+          }
+          optimizedGoals.add(goal);
+          statsByGoalPriority.put(goal, clusterModel.getClusterStats(_balancingConstraint, optimizationOptions));
+          Duration duration = Duration.ofMillis(_time.milliseconds() - startTimeMs);
+          optimizationDurationByGoal.put(goal.name(), duration);
+          goalSpan.setAttribute("goal.duration.ms", duration.toMillis());
+
+          boolean hasDiff = AnalyzerUtils.hasDiff(preOptimizedReplicaDistribution, preOptimizedLeaderDistribution, clusterModel);
+          if (hasDiff || !succeeded) {
+            violatedGoalNamesBeforeOptimization.add(goal.name());
+          }
+          if (!succeeded) {
+            violatedGoalNamesAfterOptimization.add(goal.name());
+          }
+
+          goalSpan.setAttribute("goal.succeeded", succeeded);
+          goalSpan.setAttribute("goal.has.diff", hasDiff);
+          goalSpan.setStatus(StatusCode.OK);
+
+          step.done();
+          if (LOG.isDebugEnabled()) {
+            LOG.debug("Broker level stats after optimization: {}", clusterModel.brokerStats(null));
+          }
+          provisionResponse.aggregate(goal.provisionResponse());
+          LOG.info("[{}/{}] Generated {} proposals for {}{}. Provision status: {}; aggregated provision status: {}",
+                   optimizedGoals.size(),
+                   _goalsByPriority.size(),
+                   hasDiff ? "some" : "no",
+                   isSelfHealing ? "self-healing " : "",
+                   goal.name(),
+                   goal.provisionResponse().status(),
+                   provisionResponse.status());
+        } catch (Exception e) {
+          goalSpan.recordException(e);
+          goalSpan.setStatus(StatusCode.ERROR, "Unexpected error during goal optimization");
+          throw e;
+        } finally {
+          goalSpan.end();
+        }
       }
 
-      step.done();
-      if (LOG.isDebugEnabled()) {
-        LOG.debug("Broker level stats after optimization: {}", clusterModel.brokerStats(null));
+      setHasUnfixableProposalOptimization(false, goalsByPriority);
+
+      // Broker level stats in the final cluster state.
+      if (LOG.isTraceEnabled()) {
+        LOG.trace("Broker level stats after optimization: {}%n", clusterModel.brokerStats(null));
       }
-      provisionResponse.aggregate(goal.provisionResponse());
-      LOG.info("[{}/{}] Generated {} proposals for {}{}. Provision status: {}; aggregated provision status: {}",
-               optimizedGoals.size(),
-               _goalsByPriority.size(),
-               hasDiff ? "some" : "no",
-               isSelfHealing ? "self-healing " : "",
-               goal.name(),
-               goal.provisionResponse().status(),
-               provisionResponse.status());
+
+      // Skip replication factor change check here since in above iteration we already check for each goal it does not change
+      // any partition's replication factor.
+      Set<ExecutionProposal> proposals =
+          AnalyzerUtils.getDiff(initReplicaDistributionForProposalGeneration != null ? initReplicaDistributionForProposalGeneration
+                                                                                     : initReplicaDistribution,
+                                initLeaderDistribution,
+                                clusterModel,
+                                true);
+
+      optimizationsSpan.setAttribute("proposals.generated", proposals.size());
+      optimizationsSpan.setAttribute("goals.violated.before", violatedGoalNamesBeforeOptimization.size());
+      optimizationsSpan.setAttribute("goals.violated.after", violatedGoalNamesAfterOptimization.size());
+      optimizationsSpan.setStatus(StatusCode.OK);
+
+      return new OptimizerResult(statsByGoalPriority,
+                                 violatedGoalNamesBeforeOptimization,
+                                 violatedGoalNamesAfterOptimization,
+                                 proposals,
+                                 brokerStatsBeforeOptimization,
+                                 clusterModel,
+                                 optimizationOptions,
+                                 balancednessCostByGoal(goalsByPriority, _priorityWeight, _strictnessWeight),
+                                 optimizationDurationByGoal,
+                                 provisionResponse);
+    } catch (Exception e) {
+      optimizationsSpan.recordException(e);
+      optimizationsSpan.setStatus(StatusCode.ERROR, "Optimizations failed");
+      throw e;
+    } finally {
+      optimizationsSpan.end();
     }
-
-    setHasUnfixableProposalOptimization(false, goalsByPriority);
-
-    // Broker level stats in the final cluster state.
-    if (LOG.isTraceEnabled()) {
-      LOG.trace("Broker level stats after optimization: {}%n", clusterModel.brokerStats(null));
-    }
-
-    // Skip replication factor change check here since in above iteration we already check for each goal it does not change
-    // any partition's replication factor.
-    Set<ExecutionProposal> proposals =
-        AnalyzerUtils.getDiff(initReplicaDistributionForProposalGeneration != null ? initReplicaDistributionForProposalGeneration
-                                                                                   : initReplicaDistribution,
-                              initLeaderDistribution,
-                              clusterModel,
-                              true);
-    return new OptimizerResult(statsByGoalPriority,
-                               violatedGoalNamesBeforeOptimization,
-                               violatedGoalNamesAfterOptimization,
-                               proposals,
-                               brokerStatsBeforeOptimization,
-                               clusterModel,
-                               optimizationOptions,
-                               balancednessCostByGoal(goalsByPriority, _priorityWeight, _strictnessWeight),
-                               optimizationDurationByGoal,
-                               provisionResponse);
   }
 
   private void setHasUnfixableProposalOptimization(boolean hasUnfixableProposalOptimization, List<Goal> goalsByPriority) {

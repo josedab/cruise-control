@@ -15,6 +15,7 @@ import com.linkedin.kafka.cruisecontrol.analyzer.GoalOptimizer;
 import com.linkedin.kafka.cruisecontrol.async.progress.OperationProgress;
 import com.linkedin.kafka.cruisecontrol.common.KafkaCruiseControlThreadFactory;
 import com.linkedin.kafka.cruisecontrol.common.MetadataClient;
+import com.linkedin.kafka.cruisecontrol.common.tracing.OpenTelemetryManager;
 import com.linkedin.kafka.cruisecontrol.config.BrokerSetResolver;
 import com.linkedin.kafka.cruisecontrol.config.KafkaCruiseControlConfig;
 import com.linkedin.kafka.cruisecontrol.config.TopicConfigProvider;
@@ -63,6 +64,11 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.utils.Time;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.api.trace.StatusCode;
+import io.opentelemetry.api.trace.Tracer;
+import io.opentelemetry.context.Context;
+import io.opentelemetry.context.Scope;
 
 import static com.linkedin.kafka.cruisecontrol.KafkaCruiseControlUtils.closeAdminClientWithTimeout;
 import static com.linkedin.kafka.cruisecontrol.KafkaCruiseControlUtils.createAdminClient;
@@ -86,6 +92,7 @@ public class KafkaCruiseControl {
   private final Time _time;
   private final AdminClient _adminClient;
   private final Provisioner _provisioner;
+  private final OpenTelemetryManager _openTelemetryManager;
 
   private static final String VERSION;
   private static final String COMMIT_ID;
@@ -126,6 +133,7 @@ public class KafkaCruiseControl {
     _loadMonitor = new LoadMonitor(config, _time, dropwizardMetricRegistry, KafkaMetricDef.commonMetricDef());
     _goalOptimizerExecutor = Executors.newSingleThreadExecutor(new KafkaCruiseControlThreadFactory("GoalOptimizerExecutor"));
     _goalOptimizer = new GoalOptimizer(config, _loadMonitor, _time, dropwizardMetricRegistry, _executor, _adminClient);
+    _openTelemetryManager = new OpenTelemetryManager(config);
   }
 
   /**
@@ -148,6 +156,7 @@ public class KafkaCruiseControl {
     _goalOptimizerExecutor = goalOptimizerExecutor;
     _goalOptimizer = goalOptimizer;
     _provisioner = provisioner;
+    _openTelemetryManager = new OpenTelemetryManager(config);
   }
 
   /**
@@ -236,6 +245,7 @@ public class KafkaCruiseControl {
       _executor.shutdown();
       _anomalyDetectorManager.shutdown();
       _goalOptimizer.shutdown();
+      _openTelemetryManager.shutdown();
       closeAdminClientWithTimeout(_adminClient);
       LOG.info("Kafka Cruise Control shutdown completed.");
     });
@@ -533,10 +543,26 @@ public class KafkaCruiseControl {
    */
   public OptimizerResult getProposals(OperationProgress operationProgress, boolean allowCapacityEstimation)
       throws KafkaCruiseControlException {
-    try {
-      return _goalOptimizer.optimizations(operationProgress, allowCapacityEstimation);
+    Tracer tracer = _openTelemetryManager.getTracer();
+    Span span = tracer.spanBuilder("cruise-control.get-proposals")
+        .setAttribute("allow.capacity.estimation", allowCapacityEstimation)
+        .startSpan();
+
+    try (Scope scope = span.makeCurrent()) {
+      OptimizerResult result = _goalOptimizer.optimizations(operationProgress, allowCapacityEstimation);
+      span.setAttribute("proposals.count", result.goalProposals().size());
+      span.setStatus(StatusCode.OK);
+      return result;
     } catch (InterruptedException ie) {
+      span.recordException(ie);
+      span.setStatus(StatusCode.ERROR, "Interrupted when getting optimization proposals");
       throw new KafkaCruiseControlException("Interrupted when getting the optimization proposals", ie);
+    } catch (Exception e) {
+      span.recordException(e);
+      span.setStatus(StatusCode.ERROR, "Failed to get optimization proposals");
+      throw e;
+    } finally {
+      span.end();
     }
   }
 
@@ -670,13 +696,31 @@ public class KafkaCruiseControl {
                                boolean isTriggeredByUserRequest,
                                String uuid,
                                boolean skipInterBrokerReplicaConcurrencyAdjustment) throws OngoingExecutionException {
-    if (hasProposalsToExecute(proposals, uuid)) {
-      _executor.executeProposals(proposals, unthrottledBrokers, null, _loadMonitor, concurrentInterBrokerPartitionMovements,
-                                 maxInterBrokerPartitionMovements, concurrentIntraBrokerPartitionMovements, clusterConcurrentLeaderMovements,
-                                 brokerConcurrentLeaderMovements, executionProgressCheckIntervalMs, replicaMovementStrategy, replicationThrottle,
-                                 isTriggeredByUserRequest, uuid, isKafkaAssignerMode, skipInterBrokerReplicaConcurrencyAdjustment);
-    } else {
-      failGeneratingProposalsForExecution(uuid);
+    Tracer tracer = _openTelemetryManager.getTracer();
+    Span span = tracer.spanBuilder("cruise-control.execute-proposals")
+        .setAttribute("proposals.count", proposals.size())
+        .setAttribute("execution.uuid", uuid)
+        .setAttribute("kafka.assigner.mode", isKafkaAssignerMode)
+        .setAttribute("triggered.by.user", isTriggeredByUserRequest)
+        .startSpan();
+
+    try (Scope scope = span.makeCurrent()) {
+      if (hasProposalsToExecute(proposals, uuid)) {
+        _executor.executeProposals(proposals, unthrottledBrokers, null, _loadMonitor, concurrentInterBrokerPartitionMovements,
+                                   maxInterBrokerPartitionMovements, concurrentIntraBrokerPartitionMovements, clusterConcurrentLeaderMovements,
+                                   brokerConcurrentLeaderMovements, executionProgressCheckIntervalMs, replicaMovementStrategy, replicationThrottle,
+                                   isTriggeredByUserRequest, uuid, isKafkaAssignerMode, skipInterBrokerReplicaConcurrencyAdjustment);
+        span.setStatus(StatusCode.OK);
+      } else {
+        failGeneratingProposalsForExecution(uuid);
+        span.setStatus(StatusCode.ERROR, "No proposals to execute");
+      }
+    } catch (Exception e) {
+      span.recordException(e);
+      span.setStatus(StatusCode.ERROR, "Failed to execute proposals");
+      throw e;
+    } finally {
+      span.end();
     }
   }
 
