@@ -460,6 +460,38 @@ public final class AnalyzerConfig {
       String.format("The class implements %s interface and is used to generate replica to broker set mapping.",
                     ReplicaToBrokerSetMappingPolicy.class.getName());
 
+  /**
+   * <code>distributed.optimization.enabled</code>
+   */
+  public static final String DISTRIBUTED_OPTIMIZATION_ENABLED_CONFIG = "distributed.optimization.enabled";
+  public static final boolean DEFAULT_DISTRIBUTED_OPTIMIZATION_ENABLED = false;
+  public static final String DISTRIBUTED_OPTIMIZATION_ENABLED_DOC = "Enable distributed goal optimization across multiple worker nodes. "
+      + "When enabled, goals are distributed to worker nodes for parallel execution, enabling linear scaling for large clusters (100K+ brokers).";
+
+  /**
+   * <code>distributed.optimization.workers</code>
+   */
+  public static final String DISTRIBUTED_OPTIMIZATION_WORKERS_CONFIG = "distributed.optimization.workers";
+  public static final String DEFAULT_DISTRIBUTED_OPTIMIZATION_WORKERS = "";
+  public static final String DISTRIBUTED_OPTIMIZATION_WORKERS_DOC = "Comma-separated list of worker endpoints for distributed optimization. "
+      + "Format: host1:port1,host2:port2,host3:port3. Example: worker1.example.com:9091,worker2.example.com:9091";
+
+  /**
+   * <code>distributed.optimization.assignment.strategy</code>
+   */
+  public static final String DISTRIBUTED_OPTIMIZATION_ASSIGNMENT_STRATEGY_CONFIG = "distributed.optimization.assignment.strategy";
+  public static final String DEFAULT_DISTRIBUTED_OPTIMIZATION_ASSIGNMENT_STRATEGY = "STATIC";
+  public static final String DISTRIBUTED_OPTIMIZATION_ASSIGNMENT_STRATEGY_DOC = "Strategy for assigning goals to workers. "
+      + "STATIC: Round-robin distribution (simple, predictable). DYNAMIC: Work-stealing pattern (better load balancing, fault tolerance).";
+
+  /**
+   * <code>distributed.optimization.worker.timeout.ms</code>
+   */
+  public static final String DISTRIBUTED_OPTIMIZATION_WORKER_TIMEOUT_MS_CONFIG = "distributed.optimization.worker.timeout.ms";
+  public static final long DEFAULT_DISTRIBUTED_OPTIMIZATION_WORKER_TIMEOUT_MS = 600000L; // 10 minutes
+  public static final String DISTRIBUTED_OPTIMIZATION_WORKER_TIMEOUT_MS_DOC = "Timeout in milliseconds for worker optimization requests. "
+      + "Workers that exceed this timeout will be considered failed and their work may be reassigned.";
+
   private AnalyzerConfig() {
   }
 
@@ -700,6 +732,27 @@ public final class AnalyzerConfig {
                     .define(REPLICA_TO_BROKER_SET_MAPPING_POLICY_CLASS_CONFIG,
                             ConfigDef.Type.CLASS, DEFAULT_REPLICA_TO_BROKER_SET_MAPPING_POLICY_CLASS,
                             ConfigDef.Importance.LOW,
-                            REPLICA_TO_BROKER_SET_MAPPING_POLICY_CLASS_DOC);
+                            REPLICA_TO_BROKER_SET_MAPPING_POLICY_CLASS_DOC)
+                    .define(DISTRIBUTED_OPTIMIZATION_ENABLED_CONFIG,
+                            ConfigDef.Type.BOOLEAN,
+                            DEFAULT_DISTRIBUTED_OPTIMIZATION_ENABLED,
+                            ConfigDef.Importance.MEDIUM,
+                            DISTRIBUTED_OPTIMIZATION_ENABLED_DOC)
+                    .define(DISTRIBUTED_OPTIMIZATION_WORKERS_CONFIG,
+                            ConfigDef.Type.STRING,
+                            DEFAULT_DISTRIBUTED_OPTIMIZATION_WORKERS,
+                            ConfigDef.Importance.MEDIUM,
+                            DISTRIBUTED_OPTIMIZATION_WORKERS_DOC)
+                    .define(DISTRIBUTED_OPTIMIZATION_ASSIGNMENT_STRATEGY_CONFIG,
+                            ConfigDef.Type.STRING,
+                            DEFAULT_DISTRIBUTED_OPTIMIZATION_ASSIGNMENT_STRATEGY,
+                            ConfigDef.Importance.LOW,
+                            DISTRIBUTED_OPTIMIZATION_ASSIGNMENT_STRATEGY_DOC)
+                    .define(DISTRIBUTED_OPTIMIZATION_WORKER_TIMEOUT_MS_CONFIG,
+                            ConfigDef.Type.LONG,
+                            DEFAULT_DISTRIBUTED_OPTIMIZATION_WORKER_TIMEOUT_MS,
+                            atLeast(1000),
+                            ConfigDef.Importance.LOW,
+                            DISTRIBUTED_OPTIMIZATION_WORKER_TIMEOUT_MS_DOC);
   }
 }
