@@ -24,6 +24,8 @@ import com.linkedin.kafka.cruisecontrol.detector.AnomalyDetectorManager;
 import com.linkedin.kafka.cruisecontrol.detector.AnomalyDetectorState;
 import com.linkedin.kafka.cruisecontrol.detector.Provisioner;
 import com.linkedin.kafka.cruisecontrol.exception.BrokerCapacityResolutionException;
+import com.linkedin.kafka.cruisecontrol.ha.HAManager;
+import com.linkedin.kafka.cruisecontrol.ha.LeadershipListener;
 import com.linkedin.kafka.cruisecontrol.exception.KafkaCruiseControlException;
 import com.linkedin.kafka.cruisecontrol.exception.OngoingExecutionException;
 import com.linkedin.kafka.cruisecontrol.executor.ConcurrencyType;
@@ -86,6 +88,8 @@ public class KafkaCruiseControl {
   private final Time _time;
   private final AdminClient _adminClient;
   private final Provisioner _provisioner;
+  private final HAManager _haManager;
+  private volatile boolean _isLeader;
 
   private static final String VERSION;
   private static final String COMMIT_ID;
@@ -126,6 +130,8 @@ public class KafkaCruiseControl {
     _loadMonitor = new LoadMonitor(config, _time, dropwizardMetricRegistry, KafkaMetricDef.commonMetricDef());
     _goalOptimizerExecutor = Executors.newSingleThreadExecutor(new KafkaCruiseControlThreadFactory("GoalOptimizerExecutor"));
     _goalOptimizer = new GoalOptimizer(config, _loadMonitor, _time, dropwizardMetricRegistry, _executor, _adminClient);
+    _haManager = new HAManager(config, dropwizardMetricRegistry);
+    _isLeader = false; // Will be set by leader election
   }
 
   /**
@@ -148,6 +154,8 @@ public class KafkaCruiseControl {
     _goalOptimizerExecutor = goalOptimizerExecutor;
     _goalOptimizer = goalOptimizer;
     _provisioner = provisioner;
+    _haManager = null; // HA not used in test constructor
+    _isLeader = true; // In tests, assume we're the leader
   }
 
   /**
@@ -221,7 +229,32 @@ public class KafkaCruiseControl {
   public void startUp() {
     LOG.info("Starting Kafka Cruise Control...");
     _loadMonitor.startUp();
-    _anomalyDetectorManager.startDetection();
+
+    // Start HA manager if enabled
+    if (_haManager != null && _haManager.isEnabled()) {
+      try {
+        _haManager.start(new LeadershipListener() {
+          @Override
+          public void onLeadershipGained() {
+            transitionToLeader();
+          }
+
+          @Override
+          public void onLeadershipLost() {
+            transitionToStandby();
+          }
+        });
+        LOG.info("HA manager started, waiting for leader election...");
+      } catch (Exception e) {
+        LOG.error("Failed to start HA manager", e);
+        throw new RuntimeException("Failed to start HA manager", e);
+      }
+    } else {
+      // If HA is disabled, this instance is the leader
+      _isLeader = true;
+      _anomalyDetectorManager.startDetection();
+    }
+
     _goalOptimizerExecutor.execute(_goalOptimizer);
     LOG.info("Kafka Cruise Control started.");
   }
@@ -232,6 +265,9 @@ public class KafkaCruiseControl {
   public void shutdown() {
     Thread t = new Thread(() -> {
       LOG.info("Shutting down Kafka Cruise Control...");
+      if (_haManager != null) {
+        _haManager.stop();
+      }
       _loadMonitor.shutdown();
       _executor.shutdown();
       _anomalyDetectorManager.shutdown();
@@ -916,6 +952,78 @@ public class KafkaCruiseControl {
     Set<Integer> invalidBrokerIds = brokerIds.stream().filter(id -> cluster.nodeById(id) == null).collect(Collectors.toSet());
     if (!invalidBrokerIds.isEmpty()) {
       throw new IllegalArgumentException(String.format("Broker %s does not exist.", invalidBrokerIds));
+    }
+  }
+
+  /**
+   * Check if this instance is the current leader.
+   *
+   * @return true if this instance is the leader (or HA is disabled), false if standby
+   */
+  public boolean isLeader() {
+    return _isLeader;
+  }
+
+  /**
+   * Get the HA manager.
+   *
+   * @return the HA manager, or null if not initialized
+   */
+  public HAManager haManager() {
+    return _haManager;
+  }
+
+  /**
+   * Transition this instance to leader mode.
+   * Called by the HA manager when this instance is elected as leader.
+   */
+  private void transitionToLeader() {
+    LOG.info("Transitioning to LEADER mode");
+    long startTime = System.currentTimeMillis();
+
+    try {
+      _isLeader = true;
+
+      // Attempt to recover any in-flight execution state
+      if (_haManager != null && _haManager.getStateRecovery() != null) {
+        try {
+          LOG.info("Attempting to recover execution state from previous leader");
+          // Note: State recovery would be more fully implemented in production
+          // This is a placeholder for the recovery logic
+          _haManager.getStateRecovery().recoverActiveExecution();
+        } catch (Exception e) {
+          LOG.warn("Failed to recover execution state, continuing with fresh state", e);
+        }
+      }
+
+      // Enable anomaly detection
+      _anomalyDetectorManager.startDetection();
+
+      long duration = System.currentTimeMillis() - startTime;
+      LOG.info("Transitioned to LEADER mode successfully in {}ms", duration);
+    } catch (Exception e) {
+      LOG.error("Error during transition to leader", e);
+      throw new RuntimeException("Failed to transition to leader", e);
+    }
+  }
+
+  /**
+   * Transition this instance to standby mode.
+   * Called by the HA manager when this instance loses leadership.
+   */
+  private void transitionToStandby() {
+    LOG.info("Transitioning to STANDBY mode");
+
+    try {
+      _isLeader = false;
+
+      // Stop anomaly detection (but keep monitoring)
+      _anomalyDetectorManager.shutdown();
+
+      LOG.info("Transitioned to STANDBY mode successfully");
+    } catch (Exception e) {
+      LOG.error("Error during transition to standby", e);
+      throw new RuntimeException("Failed to transition to standby", e);
     }
   }
 }
