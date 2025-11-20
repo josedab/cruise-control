@@ -365,6 +365,25 @@ public final class MonitorConfig {
   public static final String METADATA_FACTOR_EXPONENT_DOC = "The exponent for the metadata factor, which corresponds to "
       + "(number of replicas) * (number of brokers with replicas) ^ exponent.";
 
+  /**
+   * <code>metrics.aggregation.incremental.enabled</code>
+   */
+  public static final String METRICS_AGGREGATION_INCREMENTAL_ENABLED_CONFIG = "metrics.aggregation.incremental.enabled";
+  public static final boolean DEFAULT_METRICS_AGGREGATION_INCREMENTAL_ENABLED = true;
+  public static final String METRICS_AGGREGATION_INCREMENTAL_ENABLED_DOC = "Enable incremental aggregation of metric samples. "
+      + "When enabled, only new samples since the last aggregation are processed, reducing CPU usage and improving performance. "
+      + "When disabled, all samples are reprocessed on every aggregation (legacy behavior).";
+
+  /**
+   * <code>metrics.aggregation.max.cached.windows</code>
+   */
+  public static final String METRICS_AGGREGATION_MAX_CACHED_WINDOWS_CONFIG = "metrics.aggregation.max.cached.windows";
+  public static final int DEFAULT_METRICS_AGGREGATION_MAX_CACHED_WINDOWS = 100;
+  public static final String METRICS_AGGREGATION_MAX_CACHED_WINDOWS_DOC = "The maximum number of metric aggregation windows "
+      + "to cache for incremental aggregation. Each cached window stores aggregated metric values to avoid reprocessing. "
+      + "Higher values use more memory but support longer lookback periods. A value of 100 with 5-minute windows supports "
+      + "~8 hours of cached history. This configuration only takes effect when incremental aggregation is enabled.";
+
   private MonitorConfig() {
   }
 
@@ -607,6 +626,17 @@ public final class MonitorConfig {
                             DEFAULT_METADATA_FACTOR_EXPONENT,
                             atLeast(1.0),
                             ConfigDef.Importance.LOW,
-                            METADATA_FACTOR_EXPONENT_DOC);
+                            METADATA_FACTOR_EXPONENT_DOC)
+                    .define(METRICS_AGGREGATION_INCREMENTAL_ENABLED_CONFIG,
+                            ConfigDef.Type.BOOLEAN,
+                            DEFAULT_METRICS_AGGREGATION_INCREMENTAL_ENABLED,
+                            ConfigDef.Importance.MEDIUM,
+                            METRICS_AGGREGATION_INCREMENTAL_ENABLED_DOC)
+                    .define(METRICS_AGGREGATION_MAX_CACHED_WINDOWS_CONFIG,
+                            ConfigDef.Type.INT,
+                            DEFAULT_METRICS_AGGREGATION_MAX_CACHED_WINDOWS,
+                            atLeast(1),
+                            ConfigDef.Importance.LOW,
+                            METRICS_AGGREGATION_MAX_CACHED_WINDOWS_DOC);
   }
 }

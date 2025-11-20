@@ -40,7 +40,9 @@ public class KafkaBrokerMetricSampleAggregator extends MetricSampleAggregator<St
           config.getLong(MonitorConfig.BROKER_METRICS_WINDOW_MS_CONFIG),
           config.getInt(MonitorConfig.MIN_SAMPLES_PER_BROKER_METRICS_WINDOW_CONFIG).byteValue(),
           config.getInt(MonitorConfig.BROKER_METRIC_SAMPLE_AGGREGATOR_COMPLETENESS_CACHE_SIZE_CONFIG),
-          KafkaMetricDef.brokerMetricDef());
+          KafkaMetricDef.brokerMetricDef(),
+          config.getBoolean(MonitorConfig.METRICS_AGGREGATION_INCREMENTAL_ENABLED_CONFIG),
+          config.getInt(MonitorConfig.METRICS_AGGREGATION_MAX_CACHED_WINDOWS_CONFIG));
     _maxAllowedExtrapoloationsPerBroker =
         config.getInt(MonitorConfig.MAX_ALLOWED_EXTRAPOLATIONS_PER_BROKER_CONFIG);
     _sampleType = SampleType.BROKER;

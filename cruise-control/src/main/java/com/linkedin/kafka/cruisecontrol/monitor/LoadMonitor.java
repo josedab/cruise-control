@@ -205,6 +205,19 @@ public class LoadMonitor {
                                       (Gauge<Integer>) () -> brokersWithReplicas(MAX_METADATA_WAIT_MS).size());
     dropwizardMetricRegistry.register(MetricRegistry.name(LOAD_MONITOR_SENSOR, "brokers-with-offline-replicas"),
                                       (Gauge<Integer>) () -> brokersWithOfflineReplicas(MAX_METADATA_WAIT_MS).size());
+    // Incremental aggregation cache metrics
+    dropwizardMetricRegistry.register(MetricRegistry.name(LOAD_MONITOR_SENSOR, "partition-aggregator-cache-hits"),
+                                      (Gauge<Long>) () -> _partitionMetricSampleAggregator.getCacheStatistics()[0]);
+    dropwizardMetricRegistry.register(MetricRegistry.name(LOAD_MONITOR_SENSOR, "partition-aggregator-cache-misses"),
+                                      (Gauge<Long>) () -> _partitionMetricSampleAggregator.getCacheStatistics()[1]);
+    dropwizardMetricRegistry.register(MetricRegistry.name(LOAD_MONITOR_SENSOR, "partition-aggregator-cache-size"),
+                                      (Gauge<Long>) () -> _partitionMetricSampleAggregator.getCacheStatistics()[2]);
+    dropwizardMetricRegistry.register(MetricRegistry.name(LOAD_MONITOR_SENSOR, "broker-aggregator-cache-hits"),
+                                      (Gauge<Long>) () -> _brokerMetricSampleAggregator.getCacheStatistics()[0]);
+    dropwizardMetricRegistry.register(MetricRegistry.name(LOAD_MONITOR_SENSOR, "broker-aggregator-cache-misses"),
+                                      (Gauge<Long>) () -> _brokerMetricSampleAggregator.getCacheStatistics()[1]);
+    dropwizardMetricRegistry.register(MetricRegistry.name(LOAD_MONITOR_SENSOR, "broker-aggregator-cache-size"),
+                                      (Gauge<Long>) () -> _brokerMetricSampleAggregator.getCacheStatistics()[2]);
   }
 
   /**

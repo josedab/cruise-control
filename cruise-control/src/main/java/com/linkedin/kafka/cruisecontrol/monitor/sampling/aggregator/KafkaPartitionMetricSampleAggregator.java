@@ -58,7 +58,9 @@ public class KafkaPartitionMetricSampleAggregator extends MetricSampleAggregator
           config.getLong(MonitorConfig.PARTITION_METRICS_WINDOW_MS_CONFIG),
           config.getInt(MonitorConfig.MIN_SAMPLES_PER_PARTITION_METRICS_WINDOW_CONFIG).byteValue(),
           config.getInt(MonitorConfig.PARTITION_METRIC_SAMPLE_AGGREGATOR_COMPLETENESS_CACHE_SIZE_CONFIG),
-          KafkaMetricDef.commonMetricDef());
+          KafkaMetricDef.commonMetricDef(),
+          config.getBoolean(MonitorConfig.METRICS_AGGREGATION_INCREMENTAL_ENABLED_CONFIG),
+          config.getInt(MonitorConfig.METRICS_AGGREGATION_MAX_CACHED_WINDOWS_CONFIG));
     _metadata = metadata;
     _maxAllowedExtrapolationsPerPartition =
         config.getInt(MonitorConfig.MAX_ALLOWED_EXTRAPOLATIONS_PER_PARTITION_CONFIG);
