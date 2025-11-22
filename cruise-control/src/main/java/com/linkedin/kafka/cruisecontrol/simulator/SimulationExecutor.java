@@ -7,7 +7,9 @@ package com.linkedin.kafka.cruisecontrol.simulator;
 import com.linkedin.kafka.cruisecontrol.analyzer.GoalOptimizer;
 import com.linkedin.kafka.cruisecontrol.analyzer.OptimizerResult;
 import com.linkedin.kafka.cruisecontrol.analyzer.goals.Goal;
+import com.linkedin.kafka.cruisecontrol.async.progress.OperationProgress;
 import com.linkedin.kafka.cruisecontrol.config.KafkaCruiseControlConfig;
+import com.linkedin.kafka.cruisecontrol.exception.KafkaCruiseControlException;
 import com.linkedin.kafka.cruisecontrol.model.ClusterModel;
 import com.linkedin.kafka.cruisecontrol.model.Partition;
 import com.linkedin.kafka.cruisecontrol.model.Replica;
@@ -19,6 +21,7 @@ import com.linkedin.kafka.cruisecontrol.simulator.model.ImpactAssessment;
 import com.linkedin.kafka.cruisecontrol.simulator.model.Recommendation;
 import com.linkedin.kafka.cruisecontrol.simulator.model.Scenario;
 import com.linkedin.kafka.cruisecontrol.simulator.model.SimulationReport;
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +43,7 @@ public class SimulationExecutor {
   private final GoalOptimizer _goalOptimizer;
   private final AnalysisEngine _analysisEngine;
   private final KafkaCruiseControlConfig _config;
+  private final LoadMonitor _loadMonitor;
 
   /**
    * Constructor for SimulationExecutor.
@@ -51,6 +55,7 @@ public class SimulationExecutor {
   public SimulationExecutor(LoadMonitor loadMonitor,
                             GoalOptimizer goalOptimizer,
                             KafkaCruiseControlConfig config) {
+    _loadMonitor = loadMonitor;
     _scenarioBuilder = new ScenarioBuilder(loadMonitor);
     _goalOptimizer = goalOptimizer;
     _analysisEngine = new AnalysisEngine();
@@ -59,23 +64,33 @@ public class SimulationExecutor {
 
   /**
    * Executes a simulation scenario.
-   * <p>
-   * Note: This is a simplified implementation. A production version would:
-   * - Support custom optimization options
-   * - Handle concurrent simulations
-   * - Provide progress tracking
-   * - Cache results for performance
-   * </p>
    *
    * @param scenario the scenario to simulate
    * @param goals the optimization goals to use
    * @param requirements model completeness requirements
    * @return simulation report with results and recommendations
-   * @throws Exception if simulation fails
+   * @throws SimulationException if simulation fails
    */
   public SimulationReport execute(Scenario scenario,
                                   List<Goal> goals,
-                                  ModelCompletenessRequirements requirements) throws Exception {
+                                  ModelCompletenessRequirements requirements) throws SimulationException {
+    return execute(scenario, goals, requirements, new OperationProgress());
+  }
+
+  /**
+   * Executes a simulation scenario with progress tracking.
+   *
+   * @param scenario the scenario to simulate
+   * @param goals the optimization goals to use
+   * @param requirements model completeness requirements
+   * @param operationProgress progress tracker
+   * @return simulation report with results and recommendations
+   * @throws SimulationException if simulation fails
+   */
+  public SimulationReport execute(Scenario scenario,
+                                  List<Goal> goals,
+                                  ModelCompletenessRequirements requirements,
+                                  OperationProgress operationProgress) throws SimulationException {
     LOG.info("Executing simulation for scenario: {}", scenario.name());
     long startTime = System.currentTimeMillis();
 
@@ -90,8 +105,9 @@ public class SimulationExecutor {
 
       // Step 3: Run optimization
       LOG.debug("Running optimization with {} goals", goals.size());
-      OptimizerResult optimizationResult = runOptimization(simulatedModel, goals);
-      LOG.debug("Optimization complete: {} proposals generated", optimizationResult.goalProposals().size());
+      OptimizerResult optimizationResult = runOptimization(simulatedModel, goals, operationProgress);
+      LOG.debug("Optimization complete: {} proposals generated",
+          optimizationResult != null ? optimizationResult.goalProposals().size() : 0);
 
       // Step 4: Analyze capacity
       LOG.debug("Analyzing capacity");
@@ -125,10 +141,40 @@ public class SimulationExecutor {
 
       return report;
 
+    } catch (SimulationException e) {
+      throw e;
     } catch (Exception e) {
       LOG.error("Simulation failed for scenario: {}", scenario.name(), e);
-      throw new Exception("Simulation failed: " + e.getMessage(), e);
+      throw new SimulationException("Simulation failed: " + e.getMessage(), e);
     }
+  }
+
+  /**
+   * Executes multiple scenarios and returns comparison results.
+   *
+   * @param scenarios list of scenarios to simulate
+   * @param goals the optimization goals to use
+   * @param requirements model completeness requirements
+   * @return list of simulation reports for comparison
+   * @throws SimulationException if any simulation fails
+   */
+  public List<SimulationReport> executeComparison(List<Scenario> scenarios,
+                                                  List<Goal> goals,
+                                                  ModelCompletenessRequirements requirements) throws SimulationException {
+    LOG.info("Executing comparison simulation for {} scenarios", scenarios.size());
+
+    List<SimulationReport> reports = new ArrayList<>();
+    for (Scenario scenario : scenarios) {
+      try {
+        SimulationReport report = execute(scenario, goals, requirements);
+        reports.add(report);
+      } catch (SimulationException e) {
+        LOG.warn("Scenario '{}' failed: {}", scenario.name(), e.getMessage());
+        // Continue with other scenarios
+      }
+    }
+
+    return reports;
   }
 
   /**
@@ -139,6 +185,8 @@ public class SimulationExecutor {
    */
   private ClusterStats collectClusterStats(ClusterModel model) {
     int brokerCount = model.brokers().size();
+    int aliveBrokerCount = model.aliveBrokers().size();
+    int deadBrokerCount = model.deadBrokers().size();
     int partitionCount = model.partitions().size();
 
     // Count total replicas and data
@@ -148,44 +196,59 @@ public class SimulationExecutor {
     for (Partition partition : model.partitions()) {
       for (Replica replica : partition.replicas()) {
         replicaCount++;
-        // Simplified: use replica size if available
-        // In practice, we'd sum up actual disk usage
-        totalDataBytes += replica.disk().diskUsage();
+        if (replica.disk() != null) {
+          totalDataBytes += replica.disk().diskUsage();
+        }
       }
     }
+
+    LOG.debug("Cluster stats: brokers={} (alive={}, dead={}), partitions={}, replicas={}",
+        brokerCount, aliveBrokerCount, deadBrokerCount, partitionCount, replicaCount);
 
     return new ClusterStats(brokerCount, partitionCount, replicaCount, totalDataBytes);
   }
 
   /**
-   * Runs optimization on the cluster model.
-   * <p>
-   * Note: This is a simplified implementation that uses the goal optimizer's
-   * default optimization logic. A production implementation would provide
-   * more control over optimization options.
-   * </p>
+   * Runs optimization on the cluster model using GoalOptimizer.
    *
    * @param model the cluster model to optimize
    * @param goals the goals to use for optimization
+   * @param operationProgress progress tracker
    * @return optimization result
-   * @throws Exception if optimization fails
+   * @throws SimulationException if optimization fails
    */
-  private OptimizerResult runOptimization(ClusterModel model, List<Goal> goals) throws Exception {
-    // Note: This is simplified. In a real implementation, we would:
-    // 1. Create a proper operation progress tracker
-    // 2. Set up optimization options (excluded topics, brokers, etc.)
-    // 3. Handle different goal configurations
-    // 4. Support async execution
+  private OptimizerResult runOptimization(ClusterModel model,
+                                          List<Goal> goals,
+                                          OperationProgress operationProgress) throws SimulationException {
+    try {
+      // Check if cluster is alive
+      if (!model.isClusterAlive()) {
+        LOG.warn("All brokers are dead in the simulated cluster - cannot run optimization");
+        // Return a result with broker stats but no proposals
+        return new OptimizerResult(model.brokerStats(_config), null);
+      }
 
-    LOG.warn("Optimization integration is simplified in this implementation. " +
-        "Full goal-based optimization would require deeper integration with GoalOptimizer.");
+      // Check if we have goals
+      if (goals == null || goals.isEmpty()) {
+        LOG.warn("No goals specified for optimization");
+        return new OptimizerResult(model.brokerStats(_config), null);
+      }
 
-    // For now, return a mock result
-    // In production, we would call something like:
-    // return _goalOptimizer.optimizations(model, goals, operationProgress, ...);
+      // Run optimization using GoalOptimizer
+      LOG.debug("Running optimization with goals: {}",
+          goals.stream().map(g -> g.getClass().getSimpleName()).toList());
 
-    // Placeholder: Create a basic optimizer result
-    // The actual implementation would use the real goal optimizer
-    return new OptimizerResult(model.brokerStatsForReporting(_config), null);
+      OptimizerResult result = _goalOptimizer.optimizations(model, goals, operationProgress);
+
+      LOG.debug("Optimization generated {} proposals",
+          result.goalProposals() != null ? result.goalProposals().size() : 0);
+
+      return result;
+
+    } catch (KafkaCruiseControlException e) {
+      LOG.warn("Optimization failed: {}", e.getMessage());
+      // Return a result with broker stats but no proposals
+      return new OptimizerResult(model.brokerStats(_config), null);
+    }
   }
 }

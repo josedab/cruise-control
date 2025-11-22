@@ -163,6 +163,9 @@ public final class ParameterUtils {
   public static final String RIGHTSIZE_PARAMETER_OBJECT_CONFIG = "rightsize.parameter.object";
   public static final String PERMISSIONS_PARAMETER_OBJECT_CONFIG = "permissions.parameter.object";
   public static final String REMOVE_DISKS_PARAMETER_OBJECT_CONFIG = "remove.disks.parameter.object";
+  public static final String SIMULATION_PARAMETER_OBJECT_CONFIG = "simulation.parameter.object";
+  public static final String SIMULATION_COMPARE_PARAMETER_OBJECT_CONFIG = "simulation.compare.parameter.object";
+  public static final String SIMULATION_FAILURE_PARAMETER_OBJECT_CONFIG = "simulation.failure.parameter.object";
 
   private ParameterUtils() {
   }
